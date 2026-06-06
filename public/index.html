@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>MyTV Search</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main id="app" class="shell">
+      <section class="search-pane" aria-label="Search">
+        <div class="brand-row">
+          <div>
+            <h1>MyTV</h1>
+            <p>Search public media and source-site indexes.</p>
+          </div>
+          <span class="source-pill">{{ sourceLabel }}</span>
+        </div>
+
+        <form class="search-form" @submit.prevent="submitSearch">
+          <label class="search-box">
+            <span>Title, subject, creator</span>
+            <input v-model.trim="queryInput" name="q" type="search" autocomplete="off">
+          </label>
+          <label class="select-box">
+            <span>Source</span>
+            <select v-model="sourceInput" name="source">
+              <option v-for="option in sourceOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+            </select>
+          </label>
+          <button type="submit" title="Search" :disabled="loading">
+            <span aria-hidden="true">&#8981;</span>
+            Search
+          </button>
+        </form>
+        
+        <div class="result-meta">
+          <strong>{{ resultLabel }}</strong>
+          <div class="pager">
+            <button type="button" title="Previous page" :disabled="page <= 1 || loading" @click="changePage(-1)">&lt;</button>
+            <span>{{ page }}</span>
+            <button type="button" title="Next page" :disabled="!canGoNext || loading" @click="changePage(1)">&gt;</button>
+          </div>
+        </div>
+
+        <div class="results" aria-live="polite">
+          <div v-if="loading" class="notice">Searching public video collections...</div>
+          <div v-else-if="error" class="error">{{ error }}</div>
+          <div v-else-if="!results.length" class="notice">No results found. Try a broader title or switch video type.</div>
+          <template v-else>
+            <button
+              v-for="item in results"
+              :key="item.identifier"
+              class="result-card"
+              :class="{ active: item.identifier === selectedId }"
+              type="button"
+              @click="loadItem(item.identifier)"
+            >
+              <img :src="item.poster || '/placeholder.svg'" alt="">
+              <span>
+                <h3>{{ item.title }}</h3>
+                <p>{{ resultSummary(item) }}</p>
+                <span class="tags">
+                  <span v-if="item.year" class="tag">{{ item.year }}</span>
+                  <span v-if="item.creator" class="tag">{{ shortCreator(item.creator) }}</span>
+                  <span class="tag">{{ item.source }}</span>
+                </span>
+              </span>
+            </button>
+          </template>
+        </div>
+      </section>
+
+      <section class="viewer-pane" aria-label="Viewer">
+        <div v-if="!selectedItem && !detailLoading" class="empty-state">
+          <div class="empty-art"></div>
+          <h2>Select a video</h2>
+          <p>Search results appear on the left. Choose one to inspect playable files, watch, or download.</p>
+        </div>
+
+        <article v-else class="detail-panel">
+          <div class="video-wrap">
+            <video ref="player" controls playsinline :poster="selectedItem?.poster || ''" :src="playerUrl"></video>
+          </div>
+          <div class="detail-body">
+            <template v-if="detailLoading">
+              <h2>Loading...</h2>
+              <p class="description">Fetching item details and playable files.</p>
+            </template>
+            <template v-else-if="selectedItem">
+            <div class="title-row">
+              <div>
+                <h2>{{ selectedItem.title }}</h2>
+                <p>{{ detailMeta }}</p>
+              </div>
+              <a class="icon-link" :href="selectedItem.sourceUrl" target="_blank" rel="noreferrer" title="Open source page">Open</a>
+            </div>
+            <p class="description">{{ selectedItem.description || 'No description available.' }}</p>
+            <div class="file-bar">
+              <label>
+                <span>Playable file</span>
+                <select v-model.number="selectedFileIndex" :disabled="!selectedItem.files.length">
+                  <option v-if="!selectedItem.files.length">No actions found</option>
+                  <option v-for="(file, index) in selectedItem.files" :key="file.name" :value="index">
+                    {{ file.format }} - {{ formatBytes(file.size) }} - {{ file.name }}
+                  </option>
+                </select>
+              </label>
+              <button type="button" title="Watch selected file" :disabled="!selectedFile" @click="watchSelected">Play</button>
+              <button type="button" title="Download selected file" :disabled="!selectedFile || downloadBusy" @click="startDownload">Save</button>
+            </div>
+            <p v-if="playerUrl" class="media-url">
+              Media URL: <a :href="playerUrl" target="_blank" rel="noreferrer">{{ playerUrl }}</a>
+            </p>
+            <div v-if="downloadJob" class="download-status">
+              {{ downloadJob.status }} - {{ downloadDetail }}
+              <div class="progress-track"><div class="progress-bar" :style="{ width: downloadPercent + '%' }"></div></div>
+              <p v-if="downloadJob.status === 'complete'">Saved to {{ downloadJob.path }}</p>
+              <p v-if="downloadJob.error">{{ downloadJob.error }}</p>
+            </div>
+            </template>
+          </div>
+        </article>
+      </section>
+    </main>
+
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>

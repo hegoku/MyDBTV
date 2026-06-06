@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="144" height="192" viewBox="0 0 144 192" role="img" aria-label="Video">
+  <rect width="144" height="192" fill="#e7dfd3"/>
+  <rect x="18" y="24" width="108" height="144" rx="8" fill="#fffefa" stroke="#ddd4c7"/>
+  <path d="M59 74v44l35-22z" fill="#126b64"/>
+  <text x="72" y="148" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#6b6258">VIDEO</text>
+</svg>
