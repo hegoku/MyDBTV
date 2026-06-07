@@ -7,14 +7,20 @@
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
-    <main id="app" class="shell">
-      <section class="search-pane" aria-label="Search">
+    <main id="app" class="shell" :class="{ 'downloads-shell': activeView === 'downloads' }">
+      <section v-if="activeView === 'search'" class="search-pane" aria-label="Search">
         <div class="brand-row">
           <div>
             <h1>MyTV</h1>
             <p>Search public media and source-site indexes.</p>
           </div>
-          <span class="source-pill">{{ sourceLabel }}</span>
+          <div class="top-actions">
+            <span class="source-pill">{{ sourceLabel }}</span>
+            <div class="view-tabs" aria-label="Primary views">
+              <button type="button" :class="{ active: activeView === 'search' }" @click="openSearch">Search</button>
+              <button type="button" :class="{ active: activeView === 'downloads' }" @click="openDownloads">Downloads</button>
+            </div>
+          </div>
         </div>
 
         <form class="search-form" @submit.prevent="submitSearch">
@@ -57,21 +63,59 @@
               @click="loadItem(item.identifier)"
             >
               <img :src="item.poster || '/placeholder.svg'" alt="">
-              <span>
+              <div class="result-content">
                 <h3>{{ item.title }}</h3>
                 <p>{{ resultSummary(item) }}</p>
-                <span class="tags">
+                <div class="tags">
                   <span v-if="item.year" class="tag">{{ item.year }}</span>
                   <span v-if="item.creator" class="tag">{{ shortCreator(item.creator) }}</span>
                   <span class="tag">{{ item.source }}</span>
-                </span>
-              </span>
+                </div>
+              </div>
             </button>
           </template>
         </div>
       </section>
 
-      <section class="viewer-pane" aria-label="Viewer">
+      <section v-else class="download-list-pane" aria-label="Downloads">
+        <div class="brand-row">
+          <div>
+            <h1>Downloads</h1>
+            <p>Pause, resume, and remove saved media tasks.</p>
+          </div>
+          <div class="top-actions">
+            <span class="source-pill">{{ downloadsLabel }}</span>
+            <div class="view-tabs" aria-label="Primary views">
+              <button type="button" :class="{ active: activeView === 'search' }" @click="openSearch">Search</button>
+              <button type="button" :class="{ active: activeView === 'downloads' }" @click="openDownloads">Downloads</button>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="downloadsLoading" class="notice">Loading download list...</div>
+        <div v-else-if="downloadsError" class="error">{{ downloadsError }}</div>
+        <div v-else-if="!downloads.length" class="notice">No downloads yet. Save a playable file to add it here.</div>
+        <div v-else class="download-list">
+          <button
+            v-for="job in downloads"
+            :key="job.id"
+            class="download-card"
+            :class="{ active: job.id === selectedDownloadId }"
+            type="button"
+            @click="selectedDownloadId = job.id"
+          >
+            <span class="download-card-head">
+              <strong>{{ job.title }}</strong>
+              <span class="status-pill" :class="job.status">{{ job.status }}</span>
+            </span>
+            <span>{{ job.fileName }}</span>
+            <span class="download-card-meta">{{ job.type.toUpperCase() }} - {{ downloadDetailText(job) }}</span>
+            <span class="progress-track"><span class="progress-bar" :style="{ width: jobPercent(job) + '%' }"></span></span>
+          </button>
+        </div>
+      </section>
+
+      <section v-if="activeView === 'search'" class="viewer-pane" aria-label="Viewer">
         <div v-if="!selectedItem && !detailLoading" class="empty-state">
           <div class="empty-art"></div>
           <h2>Select a video</h2>
@@ -80,7 +124,28 @@
 
         <article v-else class="detail-panel">
           <div class="video-wrap">
-            <video ref="player" controls playsinline :poster="selectedItem?.poster || ''" :src="playerUrl"></video>
+            <iframe
+              v-if="embeddedPlayerUrl"
+              class="embedded-player"
+              :src="embeddedPlayerUrl"
+              title="Embedded player"
+              frameborder="0"
+              scrolling="no"
+              allow="autoplay; fullscreen"
+              allowfullscreen
+            ></iframe>
+            <a
+              v-else-if="externalPlayerUrl"
+              class="external-watch"
+              :href="externalPlayerUrl"
+              target="_blank"
+              rel="noreferrer"
+              title="Open external player"
+            >
+              <strong>Open external player</strong>
+              <p>This source is a web player page, not a direct media file.</p>
+            </a>
+            <video v-else ref="player" controls playsinline :poster="selectedItem?.poster || ''" :src="playerUrl"></video>
           </div>
           <div class="detail-body">
             <template v-if="detailLoading">
@@ -106,8 +171,12 @@
                   </option>
                 </select>
               </label>
+              <label class="connection-control">
+                <span>Connections</span>
+                <input v-model.number="downloadConcurrency" type="number" min="1" max="12" step="1">
+              </label>
               <button type="button" title="Watch selected file" :disabled="!selectedFile" @click="watchSelected">Play</button>
-              <button type="button" title="Download selected file" :disabled="!selectedFile || downloadBusy" @click="startDownload">Save</button>
+              <button type="button" title="Download selected file" :disabled="saveDisabled" @click="startDownload">{{ saveLabel }}</button>
             </div>
             <p v-if="playerUrl" class="media-url">
               Media URL: <a :href="playerUrl" target="_blank" rel="noreferrer">{{ playerUrl }}</a>
@@ -121,6 +190,63 @@
             </template>
           </div>
         </article>
+      </section>
+
+      <section v-else class="download-detail-pane" aria-label="Download details">
+        <article v-if="selectedDownload" class="download-detail">
+          <div class="title-row">
+            <div>
+              <h2>{{ selectedDownload.title }}</h2>
+              <p>{{ selectedDownload.fileName }}</p>
+            </div>
+            <span class="status-pill" :class="selectedDownload.status">{{ selectedDownload.status }}</span>
+          </div>
+
+          <div class="download-detail-grid">
+            <span>
+              <strong>Type</strong>
+              {{ selectedDownload.type.toUpperCase() }}
+            </span>
+            <span>
+              <strong>Progress</strong>
+              {{ downloadDetailText(selectedDownload) }}
+            </span>
+            <span>
+              <strong>Connections</strong>
+              {{ selectedDownload.concurrency }}
+            </span>
+            <span>
+              <strong>Created</strong>
+              {{ selectedDownload.createdAt }}
+            </span>
+            <span>
+              <strong>Updated</strong>
+              {{ selectedDownload.updatedAt }}
+            </span>
+          </div>
+
+          <div class="progress-track large"><div class="progress-bar" :style="{ width: jobPercent(selectedDownload) + '%' }"></div></div>
+          <p v-if="selectedDownload.status === 'complete'" class="media-url">Saved to {{ selectedDownload.path }}</p>
+          <p v-if="selectedDownload.error" class="error">{{ selectedDownload.error }}</p>
+
+          <div class="download-actions">
+            <button
+              type="button"
+              :disabled="!['queued', 'downloading'].includes(selectedDownload.status)"
+              @click="pauseDownload(selectedDownload)"
+            >Pause</button>
+            <button
+              type="button"
+              :disabled="!['paused', 'error'].includes(selectedDownload.status)"
+              @click="resumeDownload(selectedDownload)"
+            >Resume</button>
+            <button type="button" class="danger" @click="deleteDownload(selectedDownload)">Delete</button>
+          </div>
+        </article>
+        <div v-else class="empty-state light">
+          <h2>No download selected</h2>
+          <p>Saved files and HLS tasks will appear in the list.</p>
+        </div>
       </section>
     </main>
 

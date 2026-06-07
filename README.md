@@ -20,6 +20,8 @@ $env:PORT=5180; npm start
 
 The frontend uses Vue 3 from the official CDN, so no build step is required. The app starts idle; enter a query and press Search.
 
+Downloads use Node's built-in SQLite support, so Node.js 24 or newer is required.
+
 ## Features
 
 - Search movies and classic TV/public video collections
@@ -28,8 +30,13 @@ The frontend uses Vue 3 from the official CDN, so no build step is required. The
 - View poster, year, creator, description, and available files
 - Watch playable MP4/HLS files in the browser
 - Resolve YouziSP, JFXQ, and MeijuTT watch pages into public media URLs when the page exposes them
-- Download selected files into `downloads/`
-- Track download progress in the UI
+- Add selected files to a download list saved under `downloads/`
+- Pause, resume, and delete download jobs from the Downloads page
+- Download direct media files and VOD m3u8/HLS playlists, including AES-128 encrypted streams and byte-range playlists
+- Configure parallel download connections per task
+- Resume direct-file downloads with HTTP Range pieces and HLS downloads from cached segment files
+- Persist download jobs and piece progress in `downloads/downloads.sqlite`
+- Cache HLS segments as individual files while downloading, then assemble them in playlist order when all segments are complete
 
 ## Adding Providers
 

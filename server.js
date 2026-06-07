@@ -2,6 +2,7 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const { URL } = require("url");
+const { DownloadManager } = require("./download-manager");
 
 const PORT = Number(process.env.PORT || 5177);
 const MAX_PORT_ATTEMPTS = 20;
@@ -9,6 +10,7 @@ const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, "public");
 const DOWNLOAD_DIR = path.join(ROOT, "downloads");
 const { providers, providerRegistry } = require("./providers");
+const downloadManager = new DownloadManager({ downloadDir: DOWNLOAD_DIR });
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -22,8 +24,6 @@ const MIME_TYPES = {
   ".ico": "image/x-icon"
 };
 
-const downloadJobs = new Map();
-
 function sendJson(res, status, data) {
   const body = JSON.stringify(data);
   res.writeHead(status, {
@@ -36,10 +36,6 @@ function sendJson(res, status, data) {
 function sendText(res, status, text) {
   res.writeHead(status, { "content-type": "text/plain; charset=utf-8" });
   res.end(text);
-}
-
-function sanitizeFileName(name) {
-  return String(name || "video").replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").slice(0, 180);
 }
 
 function parseExternalId(identifier) {
@@ -81,9 +77,15 @@ async function searchCombined(requestUrl) {
   const tasks = selectedProviders.map((provider) => searchSourceProvider(provider, query, page));
 
   const settled = await Promise.allSettled(tasks);
-  const payloads = settled.map((result) => {
+  const payloads = settled.map((result, index) => {
     if (result.status === "fulfilled") return result.value;
-    return { provider: "Unknown", page, total: 0, results: [], error: result.reason?.message || "Search failed." };
+    return {
+      provider: selectedProviders[index]?.name || "Unknown",
+      page,
+      total: 0,
+      results: [],
+      error: result.reason?.message || "Search failed."
+    };
   });
   const results = payloads.flatMap((payload) => payload.results || []);
   const errors = payloads.filter((payload) => payload.error).map((payload) => `${payload.provider}: ${payload.error}`);
@@ -120,81 +122,29 @@ async function getItem(identifier) {
   return getProviderItem(identifier);
 }
 
-async function startDownload(identifier, fileName) {
-  const parsed = parseExternalId(identifier);
+async function startDownload(body) {
+  if (body.file?.url) {
+    return downloadManager.create({
+      item: {
+        title: String(body.title || body.item?.title || "Video")
+      },
+      file: {
+        name: String(body.file.name || "media"),
+        format: String(body.file.format || ""),
+        size: Number(body.file.size || 0),
+        url: String(body.file.url || ""),
+        concurrency: body.concurrency ?? body.file.concurrency
+      }
+    });
+  }
+
+  const parsed = parseExternalId(String(body.identifier || ""));
   if (!parsed || !parsed.provider.getDownloadFile) {
     throw new Error("Downloads are not available for this provider.");
   }
-  const { item, file } = await parsed.provider.getDownloadFile(parsed.sourceUrl, fileName);
 
-  fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
-  const jobId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  const safeName = sanitizeFileName(`${item.title}-${path.basename(file.name)}`);
-  const targetPath = path.join(DOWNLOAD_DIR, safeName);
-  const resolvedTarget = path.resolve(targetPath);
-  if (!resolvedTarget.startsWith(path.resolve(DOWNLOAD_DIR) + path.sep)) {
-    throw new Error("Unsafe download path.");
-  }
-
-  const job = {
-    id: jobId,
-    title: item.title,
-    fileName: file.name,
-    status: "queued",
-    received: 0,
-    total: file.size || 0,
-    path: resolvedTarget,
-    error: ""
-  };
-  downloadJobs.set(jobId, job);
-
-  runDownloadJob(job, file.url).catch((error) => {
-    job.status = "error";
-    job.error = error.message;
-  });
-
-  return job;
-}
-
-async function runDownloadJob(job, url) {
-  job.status = "downloading";
-  let response;
-  try {
-    response = await fetch(url, {
-      headers: { "user-agent": "mytv-legal-media-tool/1.0" }
-    });
-  } catch {
-    throw new Error("Could not reach the media file. Check network access and try again.");
-  }
-  if (!response.ok || !response.body) {
-    throw new Error(`Download failed with ${response.status}.`);
-  }
-
-  job.total = Number(response.headers.get("content-length") || job.total || 0);
-  const tempPath = `${job.path}.part`;
-  const fileStream = fs.createWriteStream(tempPath);
-  const reader = response.body.getReader();
-
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      job.received += value.byteLength;
-      if (!fileStream.write(Buffer.from(value))) {
-        await new Promise((resolve) => fileStream.once("drain", resolve));
-      }
-    }
-  } finally {
-    fileStream.end();
-  }
-
-  await new Promise((resolve, reject) => {
-    fileStream.on("finish", resolve);
-    fileStream.on("error", reject);
-  });
-
-  fs.renameSync(tempPath, job.path);
-  job.status = "complete";
+  const { item, file } = await parsed.provider.getDownloadFile(parsed.sourceUrl, String(body.fileName || ""));
+  return downloadManager.create({ item, file: { ...file, concurrency: body.concurrency } });
 }
 
 function serveStatic(req, res, pathname) {
@@ -251,16 +201,49 @@ async function route(req, res) {
       return;
     }
 
+    if (req.method === "GET" && pathname === "/api/downloads") {
+      sendJson(res, 200, { downloads: downloadManager.list() });
+      return;
+    }
+
     if (req.method === "POST" && pathname === "/api/downloads") {
       const body = await readJsonBody(req);
-      const job = await startDownload(String(body.identifier || ""), String(body.fileName || ""));
+      const job = await startDownload(body);
       sendJson(res, 202, job);
+      return;
+    }
+
+    if (req.method === "PATCH" && pathname.startsWith("/api/downloads/")) {
+      const jobId = decodeURIComponent(pathname.replace("/api/downloads/", ""));
+      const body = await readJsonBody(req);
+      const action = String(body.action || "");
+      const job = action === "pause"
+        ? downloadManager.pause(jobId)
+        : action === "resume"
+          ? downloadManager.resume(jobId)
+          : null;
+      if (!job) {
+        sendJson(res, 404, { error: "Download job not found." });
+        return;
+      }
+      sendJson(res, 200, job);
+      return;
+    }
+
+    if (req.method === "DELETE" && pathname.startsWith("/api/downloads/")) {
+      const jobId = decodeURIComponent(pathname.replace("/api/downloads/", ""));
+      const job = downloadManager.delete(jobId);
+      if (!job) {
+        sendJson(res, 404, { error: "Download job not found." });
+        return;
+      }
+      sendJson(res, 200, job);
       return;
     }
 
     if (req.method === "GET" && pathname.startsWith("/api/downloads/")) {
       const jobId = decodeURIComponent(pathname.replace("/api/downloads/", ""));
-      const job = downloadJobs.get(jobId);
+      const job = downloadManager.get(jobId);
       if (!job) {
         sendJson(res, 404, { error: "Download job not found." });
         return;

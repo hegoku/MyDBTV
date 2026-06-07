@@ -1,4 +1,4 @@
-const MEDIA_URL_PATTERN = /\.(m3u8|mp4|m4v|webm|ogv|mpd)(?:[?#]|$)/i;
+const MEDIA_URL_PATTERN = /\.(m3u8|mp4|m4v|webm|ogv|mpd|flv)(?:[?#]|$)/i;
 
 function safeDecodeURIComponent(value) {
   let current = String(value || "");
@@ -35,7 +35,7 @@ function decodePlayerUrl(rawUrl, encrypt) {
 }
 
 function mediaFormatFromUrl(sourceUrl) {
-  const match = String(sourceUrl || "").match(/\.(m3u8|mp4|m4v|webm|ogv|mpd)(?:[?#]|$)/i);
+  const match = String(sourceUrl || "").match(/\.(m3u8|mp4|m4v|webm|ogv|mpd|flv)(?:[?#]|$)/i);
   if (!match) return "Media";
   if (match[1].toLowerCase() === "m3u8") return "HLS";
   if (match[1].toLowerCase() === "mpd") return "DASH";
@@ -67,9 +67,9 @@ function addMediaCandidate(candidates, seen, sourceUrl, baseUrl, source, name) {
 
 function extractMediaUrlsFromText(text, baseUrl, source, candidates, seen) {
   const raw = String(text || "");
-  const directPattern = /https?:\/\/[^"' <>()\\]+?\.(?:m3u8|mp4|m4v|webm|ogv|mpd)(?:\?[^"' <>()\\]*)?/gi;
-  const escapedPattern = /https?:\\\/\\\/[^"' <>()\\]+?(?:\\\/[^"' <>()\\]*)*?\.(?:m3u8|mp4|m4v|webm|ogv|mpd)(?:\?[^"' <>()\\]*)?/gi;
-  const encodedPattern = /https?%3A%2F%2F[^"' <>()\\]+?\.(?:m3u8|mp4|m4v|webm|ogv|mpd)(?:%3F[^"' <>()\\]*)?/gi;
+  const directPattern = /https?:\/\/[^"' <>()\\]+?\.(?:m3u8|mp4|m4v|webm|ogv|mpd|flv)(?:\?[^"' <>()\\]*)?/gi;
+  const escapedPattern = /https?:\\\/\\\/[^"' <>()\\]+?(?:\\\/[^"' <>()\\]*)*?\.(?:m3u8|mp4|m4v|webm|ogv|mpd|flv)(?:\?[^"' <>()\\]*)?/gi;
+  const encodedPattern = /https?%3A%2F%2F[^"' <>()\\]+?\.(?:m3u8|mp4|m4v|webm|ogv|mpd|flv)(?:%3F[^"' <>()\\]*)?/gi;
   let match;
 
   while ((match = directPattern.exec(raw))) {
@@ -83,8 +83,9 @@ function extractMediaUrlsFromText(text, baseUrl, source, candidates, seen) {
   }
 }
 
-function extractPlayerConfigCandidates(html, baseUrl, candidates, seen) {
-  const configPattern = /var\s+(player_[a-z0-9_]+)\s*=\s*({[\s\S]*?})\s*;?/gi;
+function extractPlayerConfigUrls(html, baseUrl) {
+  const urls = [];
+  const configPattern = /<script\b[^>]*>\s*var\s+(player_[a-z0-9_]+)\s*=\s*({[\s\S]*?})\s*<\/script>/gi;
   let match;
 
   while ((match = configPattern.exec(html))) {
@@ -98,16 +99,34 @@ function extractPlayerConfigCandidates(html, baseUrl, candidates, seen) {
     const entries = decodedUrl.split("#").map((entry) => entry.split("$").pop()).filter(Boolean);
 
     for (const entry of entries) {
-      addMediaCandidate(
-        candidates,
-        seen,
-        entry,
-        baseUrl,
-        `player config${fromMatch ? `: ${decodeJsStringLiteral(fromMatch[1])}` : ""}`,
-        "Resolved media"
-      );
-      extractMediaUrlsFromText(entry, baseUrl, "player config", candidates, seen);
+      try {
+        const resolved = new URL(entry, baseUrl).toString();
+        if (/^https?:\/\//i.test(resolved)) {
+          urls.push({
+            url: resolved,
+            source: `player config${fromMatch ? `: ${decodeJsStringLiteral(fromMatch[1])}` : ""}`
+          });
+        }
+      } catch {
+        // Ignore malformed player URLs.
+      }
     }
+  }
+
+  return urls;
+}
+
+function extractPlayerConfigCandidates(html, baseUrl, candidates, seen) {
+  for (const entry of extractPlayerConfigUrls(html, baseUrl)) {
+    addMediaCandidate(
+      candidates,
+      seen,
+      entry.url,
+      baseUrl,
+      entry.source,
+      "Resolved media"
+    );
+    extractMediaUrlsFromText(entry.url, baseUrl, "player config", candidates, seen);
   }
 }
 
@@ -150,5 +169,6 @@ module.exports = {
   extractFrameUrls,
   extractMediaUrlsFromText,
   extractPlayerConfigCandidates,
+  extractPlayerConfigUrls,
   preferMediaCandidates
 };

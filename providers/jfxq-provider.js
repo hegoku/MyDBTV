@@ -1,11 +1,20 @@
 const { BaseProvider } = require("./base-provider");
-const { attrValue, decodeEntities } = require("./html-utils");
+const { attrValue, decodeEntities, extractTitleFromHtml } = require("./html-utils");
+const { resolveVideoWithHeadlessBrowser } = require("./headless-video-resolver");
 const {
   extractFrameUrls,
   extractMediaUrlsFromText,
   extractPlayerConfigCandidates,
+  extractPlayerConfigUrls,
   preferMediaCandidates
 } = require("./media-utils");
+
+function makeFongmiEmbedUrl(playerUrl, title) {
+  const embedUrl = new URL("https://json.fongmi.cc/web");
+  embedUrl.searchParams.set("url", playerUrl);
+  if (title) embedUrl.searchParams.set("tittle", title);
+  return embedUrl.toString();
+}
 
 class JfxqProvider extends BaseProvider {
   constructor() {
@@ -70,6 +79,51 @@ class JfxqProvider extends BaseProvider {
     }
 
     const sorted = preferMediaCandidates(candidates);
+    if (!sorted.length) {
+      const external = extractPlayerConfigUrls(html, sourceUrl)[0] || null;
+      if (external) {
+        const title = extractTitleFromHtml(html, "").replace(/[-_].*$/, "").trim();
+        const isQqPlayer = /:\s*qq\b/i.test(external.source);
+        const embedUrl = isQqPlayer ? makeFongmiEmbedUrl(external.url, title) : "";
+        const externalCandidate = {
+          name: isQqPlayer ? "Embedded player" : "Open external player",
+          format: isQqPlayer ? "Embedded page" : "External page",
+          size: 0,
+          url: external.url,
+          source: external.source,
+          external: true,
+          embedUrl,
+          resolvable: false
+        };
+
+        if (embedUrl) {
+          try {
+            const resolved = await resolveVideoWithHeadlessBrowser(embedUrl);
+            if (resolved) {
+              const resolvedCandidate = {
+                ...resolved,
+                name: title || resolved.name,
+                resolvedFrom: external.url
+              };
+              return {
+                sourceUrl,
+                selected: resolvedCandidate,
+                candidates: [resolvedCandidate, externalCandidate]
+              };
+            }
+          } catch {
+            // Fall back to the embedded player if browser-based resolving is unavailable.
+          }
+        }
+
+        return {
+          sourceUrl,
+          selected: externalCandidate,
+          candidates: [externalCandidate]
+        };
+      }
+    }
+
     return {
       sourceUrl,
       selected: sorted[0] || null,

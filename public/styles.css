@@ -15,8 +15,14 @@
   box-sizing: border-box;
 }
 
+html,
+body {
+  height: 100%;
+}
+
 body {
   margin: 0;
+  overflow: hidden;
   min-height: 100vh;
   background:
     linear-gradient(135deg, rgba(18, 107, 100, 0.1), transparent 38%),
@@ -41,24 +47,35 @@ button {
   display: grid;
   grid-template-columns: minmax(360px, 430px) minmax(0, 1fr);
   gap: 18px;
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
   padding: 18px;
 }
 
 .search-pane,
-.viewer-pane {
+.viewer-pane,
+.download-list-pane,
+.download-detail-pane {
   min-width: 0;
 }
 
-.search-pane {
+.search-pane,
+.download-list-pane {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-height: 0;
+  max-height: calc(100vh - 36px);
   padding: 18px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: rgba(255, 254, 250, 0.92);
   box-shadow: var(--shadow);
+}
+
+.download-list-pane {
+  background: rgba(255, 254, 250, 0.94);
 }
 
 .brand-row,
@@ -69,6 +86,11 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.brand-row > div:first-child,
+.title-row > div:first-child {
+  min-width: 0;
 }
 
 h1,
@@ -96,6 +118,54 @@ h1 {
   color: var(--accent);
   font-size: 0.78rem;
   font-weight: 700;
+}
+
+.top-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.view-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.view-tabs button {
+  flex: 0 0 auto;
+  min-height: 34px;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 0 10px;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.view-tabs button.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.download-list-pane .brand-row {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.download-list-pane .top-actions {
+  width: 100%;
+  justify-content: space-between;
+}
+
+.download-list-pane .view-tabs {
+  margin-left: auto;
 }
 
 .search-form {
@@ -178,23 +248,90 @@ select {
 
 .results {
   display: grid;
+  flex: 1 1 auto;
+  align-content: start;
   gap: 10px;
-  overflow: auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding-right: 4px;
+}
+
+.download-list {
+  display: grid;
+  flex: 1 1 auto;
+  align-content: start;
+  gap: 10px;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
+}
+
+.download-card {
+  display: grid;
+  gap: 7px;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  padding: 11px;
+  color: var(--muted);
+  text-align: left;
+  transition: border-color 160ms ease, transform 160ms ease;
+}
+
+.download-card:hover,
+.download-card.active {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.download-card-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  color: var(--ink);
+}
+
+.download-card strong {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.download-card-meta {
+  font-size: 0.8rem;
 }
 
 .result-card {
   display: grid;
-  grid-template-columns: 72px 1fr;
+  grid-template-columns: 82px 1fr;
   gap: 12px;
+  align-items: start;
   width: 100%;
-  min-height: 112px;
+  min-height: 136px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fff;
-  padding: 8px;
+  padding: 9px;
   text-align: left;
   transition: border-color 160ms ease, transform 160ms ease;
+}
+
+.result-content {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 116px;
+}
+
+.result-card > span,
+.result-card > div {
+  min-width: 0;
 }
 
 .result-card:hover,
@@ -204,17 +341,20 @@ select {
 }
 
 .result-card img {
-  width: 72px;
-  height: 96px;
+  width: 82px;
+  height: 116px;
   border-radius: 5px;
   object-fit: cover;
   background: #e7dfd3;
 }
 
 .result-card h3 {
+  overflow: hidden;
   margin: 2px 0 4px;
   font-size: 0.98rem;
   line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .result-card p {
@@ -224,33 +364,141 @@ select {
   font-size: 0.82rem;
   line-height: 1.35;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 2;
 }
 
 .tags {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  min-width: 0;
   margin-top: 7px;
 }
 
 .tag {
+  display: inline-block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   border-radius: 999px;
   background: rgba(177, 63, 47, 0.1);
   color: var(--accent-2);
   padding: 3px 7px;
   font-size: 0.72rem;
   font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .viewer-pane {
-  display: grid;
-  min-height: calc(100vh - 36px);
+  display: block;
+  align-self: start;
+  max-height: calc(100vh - 36px);
+  overflow: auto;
   border: 1px solid var(--line);
   border-radius: 8px;
-  overflow: hidden;
   background: #121212;
   box-shadow: var(--shadow);
+}
+
+.download-detail-pane {
+  display: block;
+  align-self: start;
+  max-height: calc(100vh - 36px);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fffefa;
+  box-shadow: var(--shadow);
+}
+
+.download-detail {
+  display: grid;
+  gap: 18px;
+  padding: 20px;
+}
+
+.download-detail h2 {
+  margin: 0 0 4px;
+  font-size: 1.35rem;
+  line-height: 1.15;
+}
+
+.download-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.download-detail-grid span {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.download-detail-grid strong {
+  color: var(--ink);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+}
+
+.download-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.download-actions button {
+  min-width: 92px;
+  min-height: 42px;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 800;
+  padding: 0 14px;
+}
+
+.download-actions button.danger {
+  background: var(--accent-2);
+}
+
+.download-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.status-pill {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #eee4d6;
+  color: var(--muted);
+  padding: 4px 8px;
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.status-pill.downloading,
+.status-pill.queued {
+  background: rgba(18, 107, 100, 0.12);
+  color: var(--accent);
+}
+
+.status-pill.complete {
+  background: rgba(18, 107, 100, 0.18);
+  color: #0b544e;
+}
+
+.status-pill.error,
+.status-pill.paused {
+  background: rgba(177, 63, 47, 0.1);
+  color: var(--accent-2);
 }
 
 .empty-state {
@@ -258,6 +506,7 @@ select {
   place-items: center;
   align-content: center;
   gap: 14px;
+  min-height: calc(100vh - 36px);
   padding: 24px;
   color: #f8f4eb;
   text-align: center;
@@ -283,22 +532,33 @@ select {
 
 .detail-panel {
   display: grid;
-  grid-template-rows: minmax(280px, 62vh) auto;
-  min-height: 100%;
+  grid-template-rows: auto auto;
   background: #fffefa;
 }
 
 .video-wrap {
   display: grid;
   place-items: center;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  min-height: 260px;
   background: #0e0f0f;
 }
 
 video {
+  display: block;
   width: 100%;
   height: 100%;
   background: #050505;
   object-fit: contain;
+}
+
+.embedded-player {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #050505;
 }
 
 .external-watch {
@@ -312,6 +572,7 @@ video {
   background: linear-gradient(135deg, rgba(18, 107, 100, 0.28), rgba(177, 63, 47, 0.24));
   color: #f8f4eb;
   text-align: center;
+  text-decoration: none;
 }
 
 .external-watch p {
@@ -359,6 +620,10 @@ video {
   flex: 1 1 auto;
 }
 
+.file-bar .connection-control {
+  flex: 0 0 104px;
+}
+
 .file-bar button {
   width: 70px;
   background: var(--accent-2);
@@ -379,6 +644,7 @@ video {
 }
 
 .progress-track {
+  display: block;
   height: 8px;
   overflow: hidden;
   border-radius: 99px;
@@ -386,7 +652,12 @@ video {
   margin-top: 8px;
 }
 
+.progress-track.large {
+  height: 12px;
+}
+
 .progress-bar {
+  display: block;
   width: 0%;
   height: 100%;
   background: var(--accent);
@@ -395,6 +666,16 @@ video {
 
 .hidden {
   display: none;
+}
+
+.empty-state.light {
+  min-height: calc(100vh - 36px);
+  background: #fffefa;
+  color: var(--ink);
+}
+
+.empty-state.light p {
+  color: var(--muted);
 }
 
 .error {
@@ -406,11 +687,32 @@ video {
 }
 
 @media (max-width: 920px) {
-  .shell {
-    grid-template-columns: 1fr;
+  body {
+    overflow: auto;
   }
 
-  .viewer-pane {
+  .shell {
+    grid-template-columns: 1fr;
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+  }
+
+  .search-pane {
+    max-height: none;
+  }
+
+  .download-list-pane,
+  .download-detail-pane {
+    max-height: none;
+  }
+
+  .results,
+  .download-list {
+    overflow: visible;
+  }
+
+  .empty-state {
     min-height: 68vh;
   }
 }
@@ -426,7 +728,8 @@ video {
 
   .brand-row,
   .title-row,
-  .file-bar {
+  .file-bar,
+  .top-actions {
     align-items: stretch;
     flex-direction: column;
   }
@@ -439,11 +742,23 @@ video {
     width: max-content;
   }
 
-  .detail-panel {
-    grid-template-rows: minmax(210px, 42vh) auto;
+  .video-wrap {
+    min-height: 210px;
   }
 
   .file-bar button {
+    width: 100%;
+  }
+
+  .file-bar .connection-control {
+    flex-basis: auto;
+  }
+
+  .download-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .download-actions button {
     width: 100%;
   }
 }
