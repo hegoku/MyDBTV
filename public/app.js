@@ -56,7 +56,7 @@ createApp({
 
     playerUrl() {
       const url = this.selectedFile?.url || "";
-      return MEDIA_URL_PATTERN.test(url) ? url : "";
+      return MEDIA_URL_PATTERN.test(url) ? this.playbackUrlFor(url) : "";
     },
 
     embeddedPlayerUrl() {
@@ -334,6 +334,23 @@ createApp({
       return /\.m3u8(?:[?#]|$)/i.test(String(url || ""));
     },
 
+    isDirectPlaybackUrl(url) {
+      return /\.(mp4|m4v|webm|ogv)(?:[?#]|$)/i.test(String(url || ""));
+    },
+
+    playbackUrlFor(url) {
+      const mediaUrl = String(url || "");
+      if (this.isHlsUrl(mediaUrl)) {
+        const params = new URLSearchParams({ url: mediaUrl });
+        return `/api/play/hls?${params}`;
+      }
+      if (this.isDirectPlaybackUrl(mediaUrl)) {
+        const params = new URLSearchParams({ url: mediaUrl });
+        return `/api/play/direct?${params}`;
+      }
+      return mediaUrl;
+    },
+
     destroyHls() {
       if (this.hls) {
         this.hls.destroy();
@@ -350,7 +367,8 @@ createApp({
         this.destroyHls();
         if (this.isHlsUrl(file.url) && window.Hls && window.Hls.isSupported()) {
           this.hls = new Hls();
-          this.hls.loadSource(file.url);
+          player.removeAttribute("src");
+          this.hls.loadSource(this.playbackUrlFor(file.url));
           this.hls.attachMedia(player);
           this.hls.on(Hls.Events.MANIFEST_PARSED, () => {
             player.play().catch(() => {});
@@ -358,7 +376,7 @@ createApp({
           return;
         }
 
-        player.src = file.url;
+        player.src = this.playbackUrlFor(file.url);
         player.load();
         player.play().catch(() => {});
       });

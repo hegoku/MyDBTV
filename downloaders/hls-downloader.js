@@ -2,51 +2,8 @@ const fs = require("fs");
 const crypto = require("crypto");
 const path = require("path");
 const { BaseDownloader, finishStream, writeBuffer } = require("./base-downloader");
+const { HlsPlaylistLoader, sequenceIv } = require("../playback/hls-playlist");
 
-const SUPPORTED_KEY_METHODS = new Set(["NONE", "AES-128"]);
-
-function parseAttributes(text) {
-  const attrs = {};
-  const pattern = /([A-Z0-9-]+)=("(?:[^"]*)"|[^,]*)/gi;
-  let match;
-  while ((match = pattern.exec(text))) {
-    attrs[match[1].toUpperCase()] = String(match[2] || "").replace(/^"|"$/g, "");
-  }
-  return attrs;
-}
-
-function resolvePlaylistUrl(uri, baseUrl) {
-  return new URL(uri, baseUrl).toString();
-}
-
-function parseByteRange(value, previousEnd = 0) {
-  const [lengthText, offsetText] = String(value || "").split("@");
-  const length = Number(lengthText || 0);
-  const offset = offsetText === undefined ? previousEnd : Number(offsetText);
-  if (!Number.isSafeInteger(length) || length <= 0 || !Number.isSafeInteger(offset) || offset < 0) {
-    throw new Error("Invalid HLS byte range.");
-  }
-  return {
-    length,
-    offset,
-    end: offset + length - 1
-  };
-}
-
-function parseIv(value) {
-  if (!value) return null;
-  const hex = String(value).replace(/^0x/i, "").padStart(32, "0");
-  if (!/^[a-f0-9]{32}$/i.test(hex)) {
-    throw new Error("Invalid HLS encryption IV.");
-  }
-  return Buffer.from(hex, "hex");
-}
-
-function sequenceIv(sequenceNumber) {
-  const iv = Buffer.alloc(16, 0);
-  iv.writeBigUInt64BE(BigInt(sequenceNumber), 8);
-  return iv;
-}
 
 function decryptAes128(buffer, key, iv) {
   const decipher = crypto.createDecipheriv("aes-128-cbc", key, iv);
@@ -57,6 +14,7 @@ class HlsDownloader extends BaseDownloader {
   constructor(job) {
     super(job);
     this.keyCache = new Map();
+    this.playlistLoader = new HlsPlaylistLoader();
   }
 
   get segmentDir() {
@@ -295,95 +253,10 @@ class HlsDownloader extends BaseDownloader {
     }
 
     const text = await this.loadText(url);
-    const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    const variants = [];
-    const segments = [];
-    let initMap = null;
-    let currentKey = null;
-    let mediaSequence = 0;
-    let nextSegmentSequence = 0;
-    let pendingByteRange = null;
-    let previousByteRangeEnd = 0;
+    const playlist = this.playlistLoader.parse(text, url);
 
-    for (let index = 0; index < lines.length; index += 1) {
-      const line = lines[index];
-      if (line.startsWith("#EXT-X-KEY")) {
-        const attrs = parseAttributes(line);
-        const method = String(attrs.METHOD || "NONE").toUpperCase();
-        if (!SUPPORTED_KEY_METHODS.has(method)) {
-          throw new Error(`HLS encryption method ${method} is not supported.`);
-        }
-        if (method === "AES-128" && !attrs.URI) {
-          throw new Error("HLS AES-128 keys must include a URI.");
-        }
-        if (attrs.KEYFORMAT && attrs.KEYFORMAT !== "identity") {
-          throw new Error(`HLS key format ${attrs.KEYFORMAT} is not supported.`);
-        }
-        currentKey = method === "NONE" ? null : {
-          method,
-          url: resolvePlaylistUrl(attrs.URI, url),
-          iv: parseIv(attrs.IV)
-        };
-        continue;
-      }
-      if (line.startsWith("#EXT-X-MEDIA-SEQUENCE")) {
-        const value = Number(line.slice(line.indexOf(":") + 1));
-        if (Number.isSafeInteger(value) && value >= 0) {
-          mediaSequence = value;
-          nextSegmentSequence = value;
-        }
-        continue;
-      }
-      if (line.startsWith("#EXT-X-BYTERANGE")) {
-        pendingByteRange = parseByteRange(line.slice(line.indexOf(":") + 1), previousByteRangeEnd);
-        previousByteRangeEnd = pendingByteRange.end + 1;
-        continue;
-      }
-      if (line.startsWith("#EXT-X-STREAM-INF")) {
-        const attrs = parseAttributes(line);
-        const nextLine = lines[index + 1] || "";
-        if (nextLine && !nextLine.startsWith("#")) {
-          variants.push({
-            bandwidth: Number(attrs.BANDWIDTH || 0),
-            url: resolvePlaylistUrl(nextLine, url)
-          });
-          index += 1;
-        }
-        continue;
-      }
-      if (line.startsWith("#EXT-X-MAP")) {
-        const attrs = parseAttributes(line);
-        if (attrs.URI) {
-          const byteRange = attrs.BYTERANGE ? parseByteRange(attrs.BYTERANGE) : null;
-          if (currentKey?.method === "AES-128" && !currentKey.iv) {
-            throw new Error("Encrypted HLS init maps require an explicit IV.");
-          }
-          initMap = {
-            url: resolvePlaylistUrl(attrs.URI, url),
-            name: path.basename(attrs.URI),
-            byteRange,
-            key: currentKey,
-            sequenceNumber: mediaSequence
-          };
-        }
-        continue;
-      }
-      if (!line.startsWith("#")) {
-        const sequenceNumber = nextSegmentSequence;
-        nextSegmentSequence += 1;
-        segments.push({
-          url: resolvePlaylistUrl(line, url),
-          name: path.basename(line),
-          byteRange: pendingByteRange,
-          key: currentKey,
-          sequenceNumber
-        });
-        pendingByteRange = null;
-      }
-    }
-
-    if (variants.length) {
-      const selected = variants.sort((a, b) => b.bandwidth - a.bandwidth)[0];
+    if (playlist.type === "master") {
+      const selected = playlist.variants.sort((a, b) => b.bandwidth - a.bandwidth)[0];
       this.job.variantUrl = selected.url;
       this.touch();
       this.persistState();
@@ -392,7 +265,7 @@ class HlsDownloader extends BaseDownloader {
 
     return {
       url,
-      segments: initMap ? [initMap, ...segments] : segments
+      segments: playlist.segments
     };
   }
 }
