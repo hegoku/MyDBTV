@@ -3,6 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const { URL } = require("url");
 const { DownloadManager } = require("./download-manager");
+const { FavoriteStore } = require("./favorite-store");
 const { DirectPlaybackCache } = require("./playback/direct-playback-cache");
 const { DirectPlaybackProxy } = require("./playback/direct-playback-proxy");
 const { HlsPlaybackCache } = require("./playback/hls-playback-cache");
@@ -16,6 +17,7 @@ const DOWNLOAD_DIR = path.join(ROOT, "downloads");
 const PLAYBACK_CACHE_DIR = path.join(DOWNLOAD_DIR, "playback-cache");
 const { providers, providerRegistry } = require("./providers");
 const downloadManager = new DownloadManager({ downloadDir: DOWNLOAD_DIR });
+const favoriteStore = new FavoriteStore({ filePath: path.join(DOWNLOAD_DIR, "favorites.sqlite") });
 const PLAYBACK_CACHE_MAX_BYTES = Number(process.env.PLAYBACK_CACHE_MAX_BYTES || 2 * 1024 * 1024 * 1024);
 const PLAYBACK_CACHE_BUCKET_BYTES = Math.max(1, Math.floor(PLAYBACK_CACHE_MAX_BYTES / 2));
 const PLAYBACK_CACHE_MAX_AGE_MS = Number(process.env.PLAYBACK_CACHE_MAX_AGE_MS || 3 * 24 * 60 * 60 * 1000);
@@ -176,6 +178,16 @@ async function startDownload(body) {
   return downloadManager.create({ item, file: { ...file, concurrency: body.concurrency } });
 }
 
+function saveFavorite(body) {
+  return favoriteStore.save({
+    originalPageUrl: body.originalPageUrl || body.sourceUrl || body.original_page_url,
+    source: body.source,
+    title: body.title,
+    videoUrl: body.videoUrl || body.video_url,
+    coverUrl: body.coverUrl || body.poster || body.cover_url
+  });
+}
+
 function serveStatic(req, res, pathname) {
   const requested = pathname === "/" ? "/index.html" : pathname;
   const filePath = path.resolve(PUBLIC_DIR, `.${decodeURIComponent(requested)}`);
@@ -252,6 +264,28 @@ async function route(req, res) {
 
     if (req.method === "GET" && pathname === "/api/downloads") {
       sendJson(res, 200, { downloads: downloadManager.list() });
+      return;
+    }
+
+    if (req.method === "GET" && pathname === "/api/favorites") {
+      sendJson(res, 200, { favorites: favoriteStore.list() });
+      return;
+    }
+
+    if (req.method === "POST" && pathname === "/api/favorites") {
+      const body = await readJsonBody(req);
+      sendJson(res, 201, saveFavorite(body));
+      return;
+    }
+
+    if (req.method === "DELETE" && pathname.startsWith("/api/favorites/")) {
+      const favoriteId = decodeURIComponent(pathname.replace("/api/favorites/", ""));
+      const favorite = favoriteStore.delete(favoriteId);
+      if (!favorite) {
+        sendJson(res, 404, { error: "Favorite not found." });
+        return;
+      }
+      sendJson(res, 200, favorite);
       return;
     }
 

@@ -154,16 +154,19 @@ h1 {
   color: #fff;
 }
 
+.search-pane .brand-row,
 .download-list-pane .brand-row {
   align-items: flex-start;
   flex-wrap: wrap;
 }
 
+.search-pane .top-actions,
 .download-list-pane .top-actions {
   width: 100%;
   justify-content: space-between;
 }
 
+.search-pane .view-tabs,
 .download-list-pane .view-tabs {
   margin-left: auto;
 }
@@ -268,6 +271,32 @@ select {
   padding-right: 4px;
 }
 
+.favorite-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.favorite-row .result-card {
+  min-height: 116px;
+}
+
+.favorite-delete {
+  width: 70px;
+  border: 1px solid rgba(177, 63, 47, 0.28);
+  border-radius: 8px;
+  background: rgba(177, 63, 47, 0.1);
+  color: var(--accent-2);
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.favorite-delete:hover {
+  background: var(--accent-2);
+  color: #fff;
+}
+
 .download-card {
   display: grid;
   gap: 7px;
@@ -281,10 +310,13 @@ select {
   transition: border-color 160ms ease, transform 160ms ease;
 }
 
-.download-card:hover,
-.download-card.active {
+.download-card:hover {
   border-color: var(--accent);
   transform: translateY(-1px);
+}
+
+.download-card.active {
+  border-color: var(--accent);
 }
 
 .download-card-head {
@@ -334,10 +366,13 @@ select {
   min-width: 0;
 }
 
-.result-card:hover,
-.result-card.active {
+.result-card:hover {
   border-color: var(--accent);
   transform: translateY(-1px);
+}
+
+.result-card.active {
+  border-color: var(--accent);
 }
 
 .result-card img {
@@ -625,8 +660,15 @@ video {
 }
 
 .file-bar button {
-  width: 70px;
+  width: auto;
+  min-width: 70px;
   background: var(--accent-2);
+  padding: 0 12px;
+}
+
+.file-bar button.favorite-action {
+  min-width: 94px;
+  background: var(--accent);
 }
 
 .file-bar button:disabled {
@@ -748,6 +790,15 @@ video {
 
   .file-bar button {
     width: 100%;
+  }
+
+  .favorite-row {
+    grid-template-columns: 1fr;
+  }
+
+  .favorite-delete {
+    width: 100%;
+    min-height: 38px;
   }
 
   .file-bar .connection-control {

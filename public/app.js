@@ -29,6 +29,10 @@ createApp({
       downloadsError: "",
       downloadsTimer: null,
       selectedDownloadId: "",
+      favorites: [],
+      favoritesLoading: false,
+      favoritesError: "",
+      selectedFavoriteId: "",
       activeView: "search",
       downloadTimer: null,
       hls: null
@@ -115,6 +119,29 @@ createApp({
       const active = this.downloads.filter((job) => ["queued", "downloading"].includes(job.status)).length;
       if (active) return `${active} active`;
       return `${this.downloads.length} saved`;
+    },
+
+    favoritesLabel() {
+      if (this.favoritesLoading) return "Loading";
+      if (!this.favorites.length) return "No favorites";
+      return `${this.favorites.length} favorites`;
+    },
+
+    selectedFavorite() {
+      const sourceUrl = this.selectedItem?.sourceUrl || "";
+      const videoUrl = this.selectedFile?.url || "";
+      if (!sourceUrl || !videoUrl) return null;
+      return this.favorites.find((favorite) => (
+        favorite.originalPageUrl === sourceUrl && favorite.videoUrl === videoUrl
+      )) || null;
+    },
+
+    favoriteDisabled() {
+      return !this.selectedItem || !this.selectedFile || Boolean(this.selectedFavorite) || this.detailLoading;
+    },
+
+    favoriteLabel() {
+      return this.selectedFavorite ? "Favorited" : "Favorite";
     }
   },
 
@@ -142,6 +169,7 @@ createApp({
   mounted() {
     this.loadProviders();
     this.loadDownloads();
+    this.loadFavorites();
     this.downloadsTimer = window.setInterval(() => this.loadDownloads({ quiet: true }), 1200);
   },
 
@@ -207,6 +235,11 @@ createApp({
       this.activeView = "search";
     },
 
+    openFavorites() {
+      this.activeView = "favorites";
+      this.loadFavorites();
+    },
+
     shortCreator(creator) {
       return String(creator || "").slice(0, 32);
     },
@@ -219,6 +252,15 @@ createApp({
 
     resultSummary(item) {
       return this.itemMeta(item) || item.description || "No details available.";
+    },
+
+    favoriteSummary(favorite) {
+      return favorite.videoUrl || "No video URL saved.";
+    },
+
+    mediaFormatLabel(url) {
+      const match = String(url || "").match(/\.(m3u8|mp4|m4v|webm|ogv|mpd|flv)(?:[?#]|$)/i);
+      return match ? match[1].toUpperCase() : "Source page";
     },
 
     async loadProviders() {
@@ -254,6 +296,24 @@ createApp({
         if (!options.quiet) this.downloadsError = error.message;
       } finally {
         if (!options.quiet) this.downloadsLoading = false;
+      }
+    },
+
+    async loadFavorites(options = {}) {
+      if (!options.quiet) {
+        this.favoritesLoading = true;
+        this.favoritesError = "";
+      }
+      try {
+        const data = await this.fetchJson("/api/favorites");
+        this.favorites = data.favorites || [];
+        if (this.selectedFavoriteId && !this.favorites.some((favorite) => favorite.id === this.selectedFavoriteId)) {
+          this.selectedFavoriteId = "";
+        }
+      } catch (error) {
+        if (!options.quiet) this.favoritesError = error.message;
+      } finally {
+        if (!options.quiet) this.favoritesLoading = false;
       }
     },
 
@@ -298,6 +358,7 @@ createApp({
 
     async loadItem(identifier) {
       this.selectedId = identifier;
+      this.selectedFavoriteId = "";
       this.selectedItem = null;
       this.selectedFileIndex = 0;
       this.detailLoading = true;
@@ -327,6 +388,97 @@ createApp({
         };
       } finally {
         this.detailLoading = false;
+      }
+    },
+
+    favoriteToItem(favorite) {
+      return {
+        id: favorite.id,
+        identifier: favorite.id,
+        title: favorite.title,
+        creator: "",
+        year: "",
+        description: favorite.videoUrl,
+        poster: favorite.coverUrl,
+        source: favorite.source,
+        sourceUrl: favorite.originalPageUrl,
+        files: [{
+          name: "Favorite video",
+          format: this.mediaFormatLabel(favorite.videoUrl),
+          size: 0,
+          url: favorite.videoUrl,
+          external: !MEDIA_URL_PATTERN.test(String(favorite.videoUrl || ""))
+        }]
+      };
+    },
+
+    loadFavorite(favorite) {
+      this.selectedId = favorite.id;
+      this.selectedFavoriteId = favorite.id;
+      this.selectedItem = this.favoriteToItem(favorite);
+      this.selectedFileIndex = 0;
+      this.detailLoading = false;
+      this.downloadJob = null;
+      this.clearDetailDownloadPolling();
+      this.$nextTick(() => {
+        const player = this.$refs.player;
+        if (player) player.load();
+      });
+    },
+
+    async addFavorite() {
+      if (!this.selectedItem || !this.selectedFile) return;
+
+      let file = this.selectedFile;
+      if (file.resolvable) {
+        try {
+          file = await this.resolveSelectedFile();
+        } catch (error) {
+          this.downloadJob = {
+            status: "error",
+            received: 0,
+            total: 0,
+            error: error.message
+          };
+          return;
+        }
+      }
+
+      try {
+        const favorite = await this.fetchJson("/api/favorites", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            originalPageUrl: this.selectedItem.sourceUrl,
+            source: this.selectedItem.source,
+            title: this.selectedItem.title,
+            videoUrl: file.url,
+            coverUrl: this.selectedItem.poster
+          })
+        });
+        await this.loadFavorites({ quiet: true });
+        this.selectedFavoriteId = favorite.id;
+      } catch (error) {
+        this.favoritesError = error.message;
+      }
+    },
+
+    async deleteFavorite(favorite) {
+      if (!favorite) return;
+      try {
+        await this.fetchJson(`/api/favorites/${encodeURIComponent(favorite.id)}`, {
+          method: "DELETE"
+        });
+        this.favorites = this.favorites.filter((candidate) => candidate.id !== favorite.id);
+        if (this.selectedFavoriteId === favorite.id) {
+          this.selectedFavoriteId = "";
+          if (this.activeView === "favorites") {
+            this.selectedId = "";
+            this.selectedItem = null;
+          }
+        }
+      } catch (error) {
+        this.favoritesError = error.message;
       }
     },
 

@@ -18,6 +18,7 @@
             <span class="source-pill">{{ sourceLabel }}</span>
             <div class="view-tabs" aria-label="Primary views">
               <button type="button" :class="{ active: activeView === 'search' }" @click="openSearch">Search</button>
+              <button type="button" :class="{ active: activeView === 'favorites' }" @click="openFavorites">Favorites</button>
               <button type="button" :class="{ active: activeView === 'downloads' }" @click="openDownloads">Downloads</button>
             </div>
           </div>
@@ -77,6 +78,53 @@
         </div>
       </section>
 
+      <section v-else-if="activeView === 'favorites'" class="search-pane favorite-list-pane" aria-label="Favorites">
+        <div class="brand-row">
+          <div>
+            <h1>Favorites</h1>
+            <p>Saved videos are ready to play from the viewer.</p>
+          </div>
+          <div class="top-actions">
+            <span class="source-pill">{{ favoritesLabel }}</span>
+            <div class="view-tabs" aria-label="Primary views">
+              <button type="button" :class="{ active: activeView === 'search' }" @click="openSearch">Search</button>
+              <button type="button" :class="{ active: activeView === 'favorites' }" @click="openFavorites">Favorites</button>
+              <button type="button" :class="{ active: activeView === 'downloads' }" @click="openDownloads">Downloads</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="result-meta">
+          <strong>{{ favoritesLabel }}</strong>
+        </div>
+
+        <div class="results favorite-results" aria-live="polite">
+          <div v-if="favoritesLoading" class="notice">Loading favorites...</div>
+          <div v-else-if="favoritesError" class="error">{{ favoritesError }}</div>
+          <div v-else-if="!favorites.length" class="notice">No favorites yet. Add one from the video detail panel.</div>
+          <template v-else>
+            <div v-for="favorite in favorites" :key="favorite.id" class="favorite-row">
+              <button
+                class="result-card"
+                :class="{ active: favorite.id === selectedFavoriteId }"
+                type="button"
+                @click="loadFavorite(favorite)"
+              >
+                <img :src="favorite.coverUrl || '/placeholder.svg'" alt="">
+                <div class="result-content">
+                  <h3>{{ favorite.title }}</h3>
+                  <p>{{ favoriteSummary(favorite) }}</p>
+                  <div class="tags">
+                    <span class="tag">{{ favorite.source }}</span>
+                  </div>
+                </div>
+              </button>
+              <button type="button" class="favorite-delete" title="Delete favorite" @click="deleteFavorite(favorite)">Delete</button>
+            </div>
+          </template>
+        </div>
+      </section>
+
       <section v-else class="download-list-pane" aria-label="Downloads">
         <div class="brand-row">
           <div>
@@ -87,6 +135,7 @@
             <span class="source-pill">{{ downloadsLabel }}</span>
             <div class="view-tabs" aria-label="Primary views">
               <button type="button" :class="{ active: activeView === 'search' }" @click="openSearch">Search</button>
+              <button type="button" :class="{ active: activeView === 'favorites' }" @click="openFavorites">Favorites</button>
               <button type="button" :class="{ active: activeView === 'downloads' }" @click="openDownloads">Downloads</button>
             </div>
           </div>
@@ -115,11 +164,11 @@
         </div>
       </section>
 
-      <section v-if="activeView === 'search'" class="viewer-pane" aria-label="Viewer">
+      <section v-if="activeView !== 'downloads'" class="viewer-pane" aria-label="Viewer">
         <div v-if="!selectedItem && !detailLoading" class="empty-state">
           <div class="empty-art"></div>
-          <h2>Select a video</h2>
-          <p>Search results appear on the left. Choose one to inspect playable files, watch, or download.</p>
+          <h2>{{ activeView === 'favorites' ? 'Select a favorite' : 'Select a video' }}</h2>
+          <p>{{ activeView === 'favorites' ? 'Favorites appear on the left. Choose one to play or remove it from the list.' : 'Search results appear on the left. Choose one to inspect playable files, watch, or download.' }}</p>
         </div>
 
         <article v-else class="detail-panel">
@@ -177,6 +226,7 @@
               </label>
               <button type="button" title="Watch selected file" :disabled="!selectedFile" @click="watchSelected">Play</button>
               <button type="button" title="Download selected file" :disabled="saveDisabled" @click="startDownload">{{ saveLabel }}</button>
+              <button type="button" class="favorite-action" title="Add to favorites" :disabled="favoriteDisabled" @click="addFavorite">{{ favoriteLabel }}</button>
             </div>
             <p v-if="playerUrl" class="media-url">
               Media URL: <a :href="playerUrl" target="_blank" rel="noreferrer">{{ playerUrl }}</a>
