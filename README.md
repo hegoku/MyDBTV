@@ -29,9 +29,11 @@ Downloads and favorites use Node's built-in SQLite support, so Node.js 24 or new
 - Filter searches by provider from the Source menu
 - View poster, year, creator, description, and available files
 - Watch playable MP4/HLS files in the browser through local playback proxies
+- Paste a direct video URL in the Play view and load it through the playback proxy
+- Play local media by entering a local file path, a `file://` URL, or choosing a video file
 - Resolve YouziSP, JFXQ, and MeijuTT watch pages into public media URLs when the page exposes them
 - Add the selected playable file to Favorites with its source page, provider, title, media URL, and cover URL
-- Switch the left pane between Search, Favorites, and Downloads
+- Switch the left pane between Search, Favorites, Play, and Downloads
 - Play or delete saved favorites from the Favorites page
 - Add selected files to a download list saved under `downloads/`
 - Pause, resume, and delete download jobs from the Downloads page
@@ -42,6 +44,18 @@ Downloads and favorites use Node's built-in SQLite support, so Node.js 24 or new
 - Persist favorites in `downloads/favorites.sqlite`
 - Cache HLS segments as individual files while downloading, then assemble them in playlist order when all segments are complete
 - Cache playback data under `downloads/playback-cache/` with automatic size and age cleanup
+
+## Play
+
+Use the Play view when you already have a media address or a local video file.
+
+- Paste an `http://` or `https://` media URL and press Play.
+- `.m3u8` URLs are routed through the HLS playback proxy.
+- Other HTTP(S) URLs are routed through the direct playback proxy, which probes the upstream server and serves browser `Range` requests from cached byte chunks.
+- Enter a local file path such as `C:\Videos\movie.mp4` or a `file://` URL to play a file from disk through the local server.
+- Use the Local file picker to play a browser-selected video file directly.
+
+Local path playback registers an in-memory token and serves the file through `/api/play/local/:token` with browser `Range` support. Local files are not copied into `downloads/` or `downloads/playback-cache/`.
 
 ## Downloads
 
@@ -165,10 +179,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS favorites_page_video_unique
 Browser playback goes through local proxy endpoints so slow upstream media can be buffered ahead:
 
 - HLS/m3u8 playback uses `/api/play/hls` and rewrites playlist segments to local cached segment URLs.
-- MP4, M4V, WebM, and OGV playback uses `/api/play/direct` and serves HTTP `Range` requests from cached byte chunks.
+- MP4, M4V, MOV, WebM, and OGV playback uses `/api/play/direct` and serves HTTP `Range` requests from cached byte chunks.
+- Manual HTTP(S) URLs entered in the Play view use the same HLS/direct playback proxy paths.
+- Local path playback uses `/api/local-media` to register a file and `/api/play/local/:token` to serve it with `Range` support.
 - Direct playback stores 4 MB chunks and serves open-ended browser ranges, such as `bytes=0-`, as bounded playback windows so the whole video is not fetched at once.
 - Both playback paths prefetch upcoming segments/chunks in parallel.
 - Playback cache files are temporary acceleration data, separate from saved downloads.
+- Local files are streamed from disk and do not use the playback cache.
 
 Playback cache defaults:
 

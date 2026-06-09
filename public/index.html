@@ -19,6 +19,7 @@
             <div class="view-tabs" aria-label="Primary views">
               <button type="button" :class="{ active: activeView === 'search' }" @click="openSearch">Search</button>
               <button type="button" :class="{ active: activeView === 'favorites' }" @click="openFavorites">Favorites</button>
+              <button type="button" :class="{ active: activeView === 'play' }" @click="openPlay">Play</button>
               <button type="button" :class="{ active: activeView === 'downloads' }" @click="openDownloads">Downloads</button>
             </div>
           </div>
@@ -89,6 +90,7 @@
             <div class="view-tabs" aria-label="Primary views">
               <button type="button" :class="{ active: activeView === 'search' }" @click="openSearch">Search</button>
               <button type="button" :class="{ active: activeView === 'favorites' }" @click="openFavorites">Favorites</button>
+              <button type="button" :class="{ active: activeView === 'play' }" @click="openPlay">Play</button>
               <button type="button" :class="{ active: activeView === 'downloads' }" @click="openDownloads">Downloads</button>
             </div>
           </div>
@@ -125,6 +127,46 @@
         </div>
       </section>
 
+      <section v-else-if="activeView === 'play'" class="search-pane play-pane" aria-label="Play">
+        <div class="brand-row">
+          <div>
+            <h1>Play</h1>
+            <p>Open a direct video URL or local media file.</p>
+          </div>
+          <div class="top-actions">
+            <span class="source-pill">Proxy playback</span>
+            <div class="view-tabs" aria-label="Primary views">
+              <button type="button" :class="{ active: activeView === 'search' }" @click="openSearch">Search</button>
+              <button type="button" :class="{ active: activeView === 'favorites' }" @click="openFavorites">Favorites</button>
+              <button type="button" :class="{ active: activeView === 'play' }" @click="openPlay">Play</button>
+              <button type="button" :class="{ active: activeView === 'downloads' }" @click="openDownloads">Downloads</button>
+            </div>
+          </div>
+        </div>
+
+        <form class="play-form" @submit.prevent="submitPlayInput">
+          <label class="search-box">
+            <span>Video URL or local path</span>
+            <input v-model.trim="playInput" name="playUrl" type="text" autocomplete="off" placeholder="https://.../video.m3u8 or C:\Videos\movie.mp4">
+          </label>
+          <button type="submit" title="Play video">Play</button>
+        </form>
+
+        <label class="file-picker">
+          <span>Local file</span>
+          <input type="file" accept="video/*,.mp4,.m4v,.mov,.webm,.ogv,.ogg,.mkv,.ts" @change="handlePlayFile">
+        </label>
+
+        <div v-if="playError" class="error">{{ playError }}</div>
+        <div v-else-if="playStatus" class="notice">{{ playStatus }}</div>
+        <div v-else class="notice">HTTP(S) media addresses use the local HLS/direct playback proxy. Local paths are served by this app with browser Range support.</div>
+
+        <div v-if="activeView === 'play' && selectedItem" class="play-current">
+          <strong>{{ selectedItem.title }}</strong>
+          <span>{{ selectedFile?.format }} - {{ formatBytes(selectedFile?.size || 0) }}</span>
+        </div>
+      </section>
+
       <section v-else class="download-list-pane" aria-label="Downloads">
         <div class="brand-row">
           <div>
@@ -136,6 +178,7 @@
             <div class="view-tabs" aria-label="Primary views">
               <button type="button" :class="{ active: activeView === 'search' }" @click="openSearch">Search</button>
               <button type="button" :class="{ active: activeView === 'favorites' }" @click="openFavorites">Favorites</button>
+              <button type="button" :class="{ active: activeView === 'play' }" @click="openPlay">Play</button>
               <button type="button" :class="{ active: activeView === 'downloads' }" @click="openDownloads">Downloads</button>
             </div>
           </div>
@@ -167,8 +210,8 @@
       <section v-if="activeView !== 'downloads'" class="viewer-pane" aria-label="Viewer">
         <div v-if="!selectedItem && !detailLoading" class="empty-state">
           <div class="empty-art"></div>
-          <h2>{{ activeView === 'favorites' ? 'Select a favorite' : 'Select a video' }}</h2>
-          <p>{{ activeView === 'favorites' ? 'Favorites appear on the left. Choose one to play or remove it from the list.' : 'Search results appear on the left. Choose one to inspect playable files, watch, or download.' }}</p>
+          <h2>{{ emptyViewerTitle }}</h2>
+          <p>{{ emptyViewerDescription }}</p>
         </div>
 
         <article v-else class="detail-panel">
@@ -207,7 +250,7 @@
                 <h2>{{ selectedItem.title }}</h2>
                 <p>{{ detailMeta }}</p>
               </div>
-              <a class="icon-link" :href="selectedItem.sourceUrl" target="_blank" rel="noreferrer" title="Open source page">Open</a>
+              <a v-if="selectedItem.sourceUrl" class="icon-link" :href="selectedItem.sourceUrl" target="_blank" rel="noreferrer" title="Open source page">Open</a>
             </div>
             <p class="description">{{ selectedItem.description || 'No description available.' }}</p>
             <div class="file-bar">

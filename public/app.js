@@ -1,5 +1,6 @@
 const { createApp } = Vue;
-const MEDIA_URL_PATTERN = /\.(m3u8|mp4|m4v|webm|ogv|mpd|flv)(?:[?#]|$)/i;
+const MEDIA_URL_PATTERN = /\.(m3u8|mp4|m4v|mov|webm|ogv|mpd|flv)(?:[?#]|$)/i;
+const HLS_URL_PATTERN = /\.m3u8(?:[?#]|$)/i;
 
 createApp({
   data() {
@@ -35,7 +36,11 @@ createApp({
       selectedFavoriteId: "",
       activeView: "search",
       downloadTimer: null,
-      hls: null
+      hls: null,
+      playInput: "",
+      playError: "",
+      playStatus: "",
+      playObjectUrl: ""
     };
   },
 
@@ -59,8 +64,7 @@ createApp({
     },
 
     playerUrl() {
-      const url = this.selectedFile?.url || "";
-      return MEDIA_URL_PATTERN.test(url) ? this.playbackUrlFor(url) : "";
+      return this.mediaUrlForFile(this.selectedFile);
     },
 
     embeddedPlayerUrl() {
@@ -69,7 +73,7 @@ createApp({
 
     externalPlayerUrl() {
       const file = this.selectedFile;
-      if (!file || file.embedUrl || !file.url || file.resolvable || MEDIA_URL_PATTERN.test(String(file.url))) return "";
+      if (!file || file.embedUrl || file.playbackUrl || file.objectUrl || !file.url || file.resolvable || MEDIA_URL_PATTERN.test(String(file.url))) return "";
       return file.external || /^https?:\/\//i.test(String(file.url)) ? file.url : "";
     },
 
@@ -89,7 +93,7 @@ createApp({
     },
 
     saveDisabled() {
-      return !this.selectedFile || this.downloadBusy || Boolean(this.selectedFileDownload);
+      return !this.selectedFile || this.selectedFile.local || this.downloadBusy || Boolean(this.selectedFileDownload);
     },
 
     saveLabel() {
@@ -137,11 +141,27 @@ createApp({
     },
 
     favoriteDisabled() {
-      return !this.selectedItem || !this.selectedFile || Boolean(this.selectedFavorite) || this.detailLoading;
+      return !this.selectedItem || !this.selectedFile || this.selectedFile.local || Boolean(this.selectedFavorite) || this.detailLoading;
     },
 
     favoriteLabel() {
       return this.selectedFavorite ? "Favorited" : "Favorite";
+    },
+
+    emptyViewerTitle() {
+      if (this.activeView === "favorites") return "Select a favorite";
+      if (this.activeView === "play") return "Enter a video";
+      return "Select a video";
+    },
+
+    emptyViewerDescription() {
+      if (this.activeView === "favorites") {
+        return "Favorites appear on the left. Choose one to play or remove it from the list.";
+      }
+      if (this.activeView === "play") {
+        return "Paste a direct video or HLS address, enter a local file path, or choose a local video file.";
+      }
+      return "Search results appear on the left. Choose one to inspect playable files, watch, or download.";
     }
   },
 
@@ -173,11 +193,12 @@ createApp({
     this.downloadsTimer = window.setInterval(() => this.loadDownloads({ quiet: true }), 1200);
   },
 
-    beforeUnmount() {
-      if (this.downloadTimer) window.clearTimeout(this.downloadTimer);
+  beforeUnmount() {
+    if (this.downloadTimer) window.clearTimeout(this.downloadTimer);
     if (this.downloadsTimer) window.clearInterval(this.downloadsTimer);
+    this.clearPlayObjectUrl();
     this.destroyHls();
-    },
+  },
 
   methods: {
     clearDetailDownloadPolling() {
@@ -240,6 +261,17 @@ createApp({
       this.loadFavorites();
     },
 
+    openPlay() {
+      this.activeView = "play";
+    },
+
+    clearPlayObjectUrl() {
+      if (this.playObjectUrl) {
+        URL.revokeObjectURL(this.playObjectUrl);
+        this.playObjectUrl = "";
+      }
+    },
+
     shortCreator(creator) {
       return String(creator || "").slice(0, 32);
     },
@@ -259,8 +291,127 @@ createApp({
     },
 
     mediaFormatLabel(url) {
-      const match = String(url || "").match(/\.(m3u8|mp4|m4v|webm|ogv|mpd|flv)(?:[?#]|$)/i);
+      const match = String(url || "").match(/\.(m3u8|mp4|m4v|mov|webm|ogv|ogg|mkv|ts|mpd|flv)(?:[?#]|$)/i);
       return match ? match[1].toUpperCase() : "Source page";
+    },
+
+    inputTitle(value) {
+      const raw = String(value || "").trim();
+      try {
+        const parsed = new URL(raw);
+        const name = decodeURIComponent(parsed.pathname.split("/").filter(Boolean).pop() || "");
+        return name || parsed.hostname || "Manual video";
+      } catch {
+        return raw.split(/[\\/]/).filter(Boolean).pop() || "Local video";
+      }
+    },
+
+    formatForManualUrl(url) {
+      if (this.isHlsUrl(url)) return "HLS";
+      const label = this.mediaFormatLabel(url);
+      return label === "Source page" ? "Direct URL" : label;
+    },
+
+    loadPlayItem(file) {
+      this.activeView = "play";
+      this.selectedId = file.id;
+      this.selectedFavoriteId = "";
+      this.selectedFileIndex = 0;
+      this.detailLoading = false;
+      this.downloadJob = null;
+      this.clearDetailDownloadPolling();
+      this.selectedItem = {
+        id: file.id,
+        identifier: file.id,
+        title: file.title,
+        creator: "",
+        year: "",
+        description: file.description || file.url,
+        poster: "",
+        source: file.local ? "Local" : "Manual",
+        sourceUrl: file.sourceUrl || "",
+        files: [{
+          name: file.name || file.title,
+          format: file.format,
+          size: file.size || 0,
+          url: file.url,
+          playbackUrl: file.playbackUrl || "",
+          objectUrl: file.objectUrl || "",
+          local: Boolean(file.local)
+        }]
+      };
+      this.$nextTick(() => this.playSelectedMedia());
+    },
+
+    async submitPlayInput() {
+      const value = this.playInput.trim();
+      this.playError = "";
+      this.playStatus = "";
+      if (!value) {
+        this.playError = "Enter a video URL or local file path.";
+        return;
+      }
+
+      try {
+        this.clearPlayObjectUrl();
+        if (/^https?:\/\//i.test(value)) {
+          this.loadPlayItem({
+            id: `manual-url:${value}`,
+            title: this.inputTitle(value),
+            name: this.inputTitle(value),
+            format: this.formatForManualUrl(value),
+            url: value,
+            playbackUrl: this.playbackUrlFor(value, { forceDirect: !this.isHlsUrl(value) }),
+            sourceUrl: value,
+            description: "Manual video URL"
+          });
+          this.playStatus = "Loading through the playback proxy.";
+          return;
+        }
+
+        const media = await this.fetchJson("/api/local-media", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ path: value })
+        });
+        this.loadPlayItem({
+          id: `local:${media.token}`,
+          title: media.name,
+          name: media.name,
+          format: this.mediaFormatLabel(media.name),
+          size: media.size,
+          url: value,
+          playbackUrl: media.url,
+          local: true,
+          description: "Local video file"
+        });
+        this.playStatus = "Playing local file through the local server.";
+      } catch (error) {
+        this.playError = error.message;
+      }
+    },
+
+    handlePlayFile(event) {
+      const file = event.target.files?.[0];
+      if (!file) return;
+
+      this.playError = "";
+      this.clearPlayObjectUrl();
+      this.playObjectUrl = URL.createObjectURL(file);
+      this.playInput = file.name;
+      this.loadPlayItem({
+        id: `file:${file.name}:${file.size}:${file.lastModified}`,
+        title: file.name,
+        name: file.name,
+        format: this.mediaFormatLabel(file.name),
+        size: file.size,
+        url: file.name,
+        objectUrl: this.playObjectUrl,
+        local: true,
+        description: "Selected local browser file"
+      });
+      this.playStatus = "Playing selected local file.";
+      event.target.value = "";
     },
 
     async loadProviders() {
@@ -483,24 +634,32 @@ createApp({
     },
 
     isHlsUrl(url) {
-      return /\.m3u8(?:[?#]|$)/i.test(String(url || ""));
+      return HLS_URL_PATTERN.test(String(url || ""));
     },
 
     isDirectPlaybackUrl(url) {
-      return /\.(mp4|m4v|webm|ogv)(?:[?#]|$)/i.test(String(url || ""));
+      return /\.(mp4|m4v|mov|webm|ogv)(?:[?#]|$)/i.test(String(url || ""));
     },
 
-    playbackUrlFor(url) {
+    playbackUrlFor(url, options = {}) {
       const mediaUrl = String(url || "");
       if (this.isHlsUrl(mediaUrl)) {
         const params = new URLSearchParams({ url: mediaUrl });
         return `/api/play/hls?${params}`;
       }
-      if (this.isDirectPlaybackUrl(mediaUrl)) {
+      if (options.forceDirect || this.isDirectPlaybackUrl(mediaUrl)) {
         const params = new URLSearchParams({ url: mediaUrl });
         return `/api/play/direct?${params}`;
       }
       return mediaUrl;
+    },
+
+    mediaUrlForFile(file) {
+      if (!file) return "";
+      if (file.playbackUrl) return file.playbackUrl;
+      if (file.objectUrl) return file.objectUrl;
+      const url = file.url || "";
+      return MEDIA_URL_PATTERN.test(url) ? this.playbackUrlFor(url) : "";
     },
 
     destroyHls() {
@@ -517,10 +676,13 @@ createApp({
         if (!player || !file) return;
 
         this.destroyHls();
+        const mediaUrl = this.mediaUrlForFile(file);
+        if (!mediaUrl) return;
+
         if (this.isHlsUrl(file.url) && window.Hls && window.Hls.isSupported()) {
           this.hls = new Hls();
           player.removeAttribute("src");
-          this.hls.loadSource(this.playbackUrlFor(file.url));
+          this.hls.loadSource(mediaUrl);
           this.hls.attachMedia(player);
           this.hls.on(Hls.Events.MANIFEST_PARSED, () => {
             player.play().catch(() => {});
@@ -528,7 +690,7 @@ createApp({
           return;
         }
 
-        player.src = this.playbackUrlFor(file.url);
+        player.src = mediaUrl;
         player.load();
         player.play().catch(() => {});
       });
@@ -584,7 +746,7 @@ createApp({
         }
       }
 
-      if (!MEDIA_URL_PATTERN.test(String(file.url || ""))) {
+      if (!file.playbackUrl && !file.objectUrl && !MEDIA_URL_PATTERN.test(String(file.url || ""))) {
         window.open(file.url, "_blank", "noopener,noreferrer");
         return;
       }
@@ -617,7 +779,7 @@ createApp({
         }
       }
 
-      if (!MEDIA_URL_PATTERN.test(String(file.url || ""))) {
+      if (!file.playbackUrl && !MEDIA_URL_PATTERN.test(String(file.url || ""))) {
         this.downloadJob = {
           status: "error",
           received: 0,

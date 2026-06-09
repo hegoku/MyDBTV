@@ -1,4 +1,5 @@
 const http = require("http");
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { URL } = require("url");
@@ -18,6 +19,7 @@ const PLAYBACK_CACHE_DIR = path.join(DOWNLOAD_DIR, "playback-cache");
 const { providers, providerRegistry } = require("./providers");
 const downloadManager = new DownloadManager({ downloadDir: DOWNLOAD_DIR });
 const favoriteStore = new FavoriteStore({ filePath: path.join(DOWNLOAD_DIR, "favorites.sqlite") });
+const localMediaTokens = new Map();
 const PLAYBACK_CACHE_MAX_BYTES = Number(process.env.PLAYBACK_CACHE_MAX_BYTES || 2 * 1024 * 1024 * 1024);
 const PLAYBACK_CACHE_BUCKET_BYTES = Math.max(1, Math.floor(PLAYBACK_CACHE_MAX_BYTES / 2));
 const PLAYBACK_CACHE_MAX_AGE_MS = Number(process.env.PLAYBACK_CACHE_MAX_AGE_MS || 3 * 24 * 60 * 60 * 1000);
@@ -55,6 +57,17 @@ const MIME_TYPES = {
   ".ico": "image/x-icon"
 };
 
+const LOCAL_MEDIA_TYPES = {
+  ".mp4": "video/mp4",
+  ".m4v": "video/mp4",
+  ".mov": "video/quicktime",
+  ".webm": "video/webm",
+  ".ogv": "video/ogg",
+  ".ogg": "video/ogg",
+  ".mkv": "video/x-matroska",
+  ".ts": "video/mp2t"
+};
+
 function sendJson(res, status, data) {
   const body = JSON.stringify(data);
   res.writeHead(status, {
@@ -67,6 +80,111 @@ function sendJson(res, status, data) {
 function sendText(res, status, text) {
   res.writeHead(status, { "content-type": "text/plain; charset=utf-8" });
   res.end(text);
+}
+
+function parseRangeHeader(value, total) {
+  if (!value) return { start: 0, end: total - 1, partial: false };
+
+  const match = String(value).match(/^bytes=(\d*)-(\d*)$/i);
+  if (!match) return null;
+
+  let start;
+  let end;
+  if (match[1] === "") {
+    const suffixLength = Number(match[2]);
+    if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) return null;
+    start = Math.max(0, total - suffixLength);
+    end = total - 1;
+  } else {
+    start = Number(match[1]);
+    end = match[2] === "" ? total - 1 : Number(match[2]);
+  }
+
+  if (
+    !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(end) ||
+    start < 0 ||
+    start >= total ||
+    end < start
+  ) {
+    return null;
+  }
+
+  return {
+    start,
+    end: Math.min(end, total - 1),
+    partial: true
+  };
+}
+
+function normalizeLocalMediaPath(value) {
+  const raw = String(value || "").trim();
+  if (!raw) throw new Error("A local file path is required.");
+
+  if (/^file:\/\//i.test(raw)) {
+    return decodeURIComponent(new URL(raw).pathname).replace(/^\/([a-zA-Z]:\/)/, "$1");
+  }
+
+  return path.resolve(raw.replace(/^"|"$/g, ""));
+}
+
+function registerLocalMedia(filePath) {
+  const resolvedPath = normalizeLocalMediaPath(filePath);
+  const stats = fs.statSync(resolvedPath);
+  if (!stats.isFile()) throw new Error("The local path is not a file.");
+
+  const ext = path.extname(resolvedPath).toLowerCase();
+  const contentType = LOCAL_MEDIA_TYPES[ext];
+  if (!contentType) {
+    throw new Error("Unsupported local video file type.");
+  }
+
+  const token = crypto.randomUUID();
+  const entry = {
+    path: resolvedPath,
+    name: path.basename(resolvedPath),
+    size: stats.size,
+    contentType,
+    createdAt: Date.now()
+  };
+  localMediaTokens.set(token, entry);
+  return {
+    token,
+    name: entry.name,
+    size: entry.size,
+    contentType,
+    url: `/api/play/local/${encodeURIComponent(token)}`
+  };
+}
+
+function serveLocalMedia(req, res, token) {
+  const entry = localMediaTokens.get(token);
+  if (!entry) {
+    sendText(res, 404, "Local media token not found.");
+    return;
+  }
+
+  const range = parseRangeHeader(req.headers.range || "", entry.size);
+  if (!range) {
+    res.writeHead(416, {
+      "content-range": `bytes */${entry.size}`,
+      "accept-ranges": "bytes",
+      "cache-control": "no-store"
+    });
+    res.end();
+    return;
+  }
+
+  const headers = {
+    "content-type": entry.contentType,
+    "content-length": range.end - range.start + 1,
+    "accept-ranges": "bytes",
+    "cache-control": "no-store"
+  };
+  if (range.partial) headers["content-range"] = `bytes ${range.start}-${range.end}/${entry.size}`;
+
+  res.writeHead(range.partial ? 206 : 200, headers);
+  fs.createReadStream(entry.path, { start: range.start, end: range.end }).pipe(res);
 }
 
 function parseExternalId(identifier) {
@@ -259,6 +377,18 @@ async function route(req, res) {
 
     if (req.method === "DELETE" && pathname === "/api/play/direct") {
       directPlaybackProxy.handleRelease(requestUrl, res);
+      return;
+    }
+
+    if (req.method === "POST" && pathname === "/api/local-media") {
+      const body = await readJsonBody(req);
+      sendJson(res, 201, registerLocalMedia(body.path || body.url));
+      return;
+    }
+
+    if (req.method === "GET" && pathname.startsWith("/api/play/local/")) {
+      const token = decodeURIComponent(pathname.replace("/api/play/local/", ""));
+      serveLocalMedia(req, res, token);
       return;
     }
 
