@@ -25,13 +25,13 @@ Downloads and favorites use Node's built-in SQLite support, so Node.js 24 or new
 ## Features
 
 - Search movies and classic TV/public video collections
-- Search metadata from `youzisp.tv`, `jfxq.tv`, and MeijuTT domains
+- Search metadata from `youzisp.tv`, `ikanbot.com` domains
 - Filter searches by provider from the Source menu
 - View poster, year, creator, description, and available files
 - Watch playable MP4/HLS files in the browser through local playback proxies
 - Paste a direct video URL in the Play view and load it through the playback proxy
 - Play local media by entering a local file path, a `file://` URL, or choosing a video file
-- Resolve YouziSP, JFXQ, and MeijuTT watch pages into public media URLs when the page exposes them
+- Resolve YouziSP watch pages into public media URLs when the page exposes them
 - Add the selected playable file to Favorites with its source page, provider, title, media URL, and cover URL
 - Switch the left pane between Search, Favorites, Play, and Downloads
 - Play or delete saved favorites from the Favorites page
@@ -209,7 +209,7 @@ Provider logic lives in `providers/`.
 - `providers/archive-provider.js` implements Internet Archive search, item details, and direct file selection.
 - `providers/generic-page-provider.js` supports sites that only need search/detail/play URL patterns.
 - `providers/youzisp-provider.js` implements YouziSP search plus media URL resolving.
-- `providers/jfxq-provider.js` implements JFXQ search plus media URL resolving.
+- `providers/ikanbot-provider.js` implements IKanBot search plus HLS media URL resolving.
 - `providers/meijutt-provider.js` implements MeijuTT search plus media URL resolving.
 - `providers/index.js` registers active providers and drives the Source menu through `/api/providers`.
 
