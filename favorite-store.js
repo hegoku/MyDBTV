@@ -72,6 +72,10 @@ class FavoriteStore {
 
   save(input) {
     const favorite = this.normalize(input);
+    // const result = this.db.prepare(`SELECT * from favorites where videoUrl=?`).get(favorite.videoUrl)
+    // if (result) {
+    //   throw Error(`Video Url ${favorite.videoUrl} already exists as title ${result.title}`)
+    // }
     this.db.prepare(`
       INSERT INTO favorites (id, original_page_url, source, title, video_url, cover_url, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)

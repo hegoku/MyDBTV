@@ -411,7 +411,11 @@ async function route(req, res) {
 
     if (req.method === "POST" && pathname === "/api/favorites") {
       const body = await readJsonBody(req);
-      sendJson(res, 201, saveFavorite(body));
+      try {
+        sendJson(res, 201, saveFavorite(body));
+      } catch (e) {
+        sendJson(res, 400, e);
+      }
       return;
     }
 

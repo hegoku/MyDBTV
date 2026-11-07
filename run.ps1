@@ -18,6 +18,11 @@ function Run-MyTv-Server {
         exit 1
     }
 
+    if (Test-Path -LiteralPath $statePath) {
+        $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+        throw "MyTV server is already running: ${$state.processId}"
+    }
+
     $process = Start-Process -FilePath "node" -ArgumentList "server.js" -PassThru
     Start-Sleep -Milliseconds 800
     if ($process.HasExited) {

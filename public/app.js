@@ -602,7 +602,7 @@ createApp({
           body: JSON.stringify({
             originalPageUrl: this.selectedItem.sourceUrl,
             source: this.selectedItem.source,
-            title: this.selectedItem.title,
+            title: `${this.selectedItem.title} - ${file.name}`,
             videoUrl: file.url,
             coverUrl: this.selectedItem.poster
           })
