@@ -212,7 +212,8 @@ class HlsPlaylistLoader {
       byteRangeLines,
       keyLines,
       mapLineToSegment,
-      hasEndList: lines.some((line) => line === "#EXT-X-ENDLIST")
+      hasEndList: lines.some((line) => line === "#EXT-X-ENDLIST"),
+      hasDiscontinuity: lines.some((line) => line === "#EXT-X-DISCONTINUITY")
     };
   }
 }

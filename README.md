@@ -44,6 +44,61 @@ Downloads and favorites use Node's built-in SQLite support, so Node.js 24 or new
 - Persist favorites in `downloads/favorites.sqlite`
 - Cache HLS segments as individual files while downloading, then assemble them in playlist order when all segments are complete
 - Cache playback data under `downloads/playback-cache/` with automatic size and age cleanup
+- Optionally expose compatible favorite videos through a read-only WebDAV library
+
+## Read-only WebDAV Favorites
+
+Set `WEBDAV_ENABLED=1` before starting MyTV to expose eligible favorites as a virtual, read-only media folder.  The server reads HTTP byte ranges through the same direct playback cache used by the browser, so seeking and copying reuse cached chunks rather than downloading the whole file first.
+
+The virtual filesystem exposes direct, byte-range-compatible favorites (`.mp4`, `.mkv`, `.webm`, and similar) and compatible HLS VOD favorites. HLS is represented as a virtual `.ts` or fragmented `.mp4` file: its playlist is indexed first, then only the segments requested by a player or copy operation are fetched through the existing HLS cache. Live streams, discontinuous playlists, encrypted playlists, and mixed segment layouts are intentionally omitted because they cannot faithfully behave as one stable random-access file.
+
+By default it listens only on `127.0.0.1:5178`:
+
+```powershell
+$env:WEBDAV_ENABLED=1
+npm start
+```
+
+For LAN access, bind deliberately and require an account:
+
+```powershell
+$env:WEBDAV_ENABLED=1
+$env:WEBDAV_HOST="0.0.0.0"
+$env:WEBDAV_PORT=5178
+$env:WEBDAV_USERNAME="mytv"
+$env:WEBDAV_PASSWORD="use-a-long-random-password"
+npm start
+```
+
+The WebDAV root is the Favorites folder. It supports `PROPFIND`, `GET`, `HEAD`, and byte-range reads only; creating, editing, and deleting files is rejected. The service intentionally refuses a non-loopback bind without both credentials.
+
+## Windows virtual folder and system SMB
+
+`mount/start-virtual-drive.ps1` uses [rclone mount](https://rclone.org/commands/rclone_mount/) and WinFsp to mount the local WebDAV library as a real, read-only Windows directory. Windows applications then use normal file APIs, and the built-in SMB server can share that directory; MyTV does not need to implement SMB itself.
+
+Install [WinFsp](https://winfsp.dev/) and [rclone](https://rclone.org/install/) first. Start MyTV with WebDAV enabled, then mount into a path that does **not** already exist (the parent must exist):
+
+```powershell
+$env:WEBDAV_ENABLED=1
+npm start
+
+# In another PowerShell window, from the project root
+.\mount\start-virtual-drive.ps1 -MountPath "C:\MyTV-Favorites"
+```
+
+If WebDAV is configured with credentials, pass them only to the mounting command; the script asks rclone to obscure the password before it is placed on its command line:
+
+```powershell
+.\mount\start-virtual-drive.ps1 -MountPath "C:\MyTV-Favorites" -WebDavUsername "mytv" -WebDavPassword "use-a-long-random-password"
+```
+
+To publish it through Windows SMB, open an elevated PowerShell and explicitly name the accounts that may read it. This intentionally has no default such as `Everyone`.
+
+```powershell
+.\mount\publish-smb-share.ps1 -MountPath "C:\MyTV-Favorites" -ShareName "MyTV" -ReadAccess "MY-PC\mytvreader"
+```
+
+Clients can then use `\\MY-PC\MyTV`. Stop the virtual directory with `./mount/stop-virtual-drive.ps1`. The SMB share itself remains until it is removed with `Remove-SmbShare -Name MyTV` from an elevated PowerShell.
 
 ## Play
 

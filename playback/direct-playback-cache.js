@@ -247,6 +247,31 @@ class DirectPlaybackCache {
     };
   }
 
+  // Protocol adapters (for example WebDAV or a future SMB server) read by
+  // offset rather than by an HTTP Range header.  Keeping this here ensures
+  // every adapter shares the same on-disk chunks and prefetch behaviour.
+  async stat(url) {
+    const session = await this.getSession(url);
+    return {
+      size: session.total,
+      contentType: session.contentType
+    };
+  }
+
+  async readAt(url, start, length) {
+    const session = await this.getSession(url);
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(length) || start < 0 || length < 0) {
+      throw new Error("A valid file offset and length are required.");
+    }
+    if (start >= session.total || length === 0) return Buffer.alloc(0);
+
+    const end = Math.min(start + length - 1, session.total - 1);
+    await this.ensureRange(session, start, end);
+    if (session.closed) throw new Error("The playback session has been closed.");
+    this.prefetchAfter(session, Math.floor(end / CHUNK_SIZE));
+    return this.readCachedBytes(session, start, end);
+  }
+
   async ensureRange(session, start, end) {
     const firstChunk = Math.floor(start / CHUNK_SIZE);
     const lastChunk = Math.floor(end / CHUNK_SIZE);

@@ -9,6 +9,8 @@ const { DirectPlaybackCache } = require("./playback/direct-playback-cache");
 const { DirectPlaybackProxy } = require("./playback/direct-playback-proxy");
 const { HlsPlaybackCache } = require("./playback/hls-playback-cache");
 const { HlsPlaybackProxy } = require("./playback/hls-playback-proxy");
+const { FavoriteFileSystem } = require("./virtual-system");
+const { createWebDavServer } = require("./webdav");
 
 const PORT = Number(process.env.PORT || 5177);
 const MAX_PORT_ATTEMPTS = 20;
@@ -43,6 +45,11 @@ const directPlaybackProxy = new DirectPlaybackProxy({
     maxCacheAgeMs: PLAYBACK_CACHE_MAX_AGE_MS,
     cleanupIntervalMs: PLAYBACK_CACHE_CLEANUP_INTERVAL_MS
   })
+});
+const favoriteFileSystem = new FavoriteFileSystem({
+  favoriteStore,
+  directPlaybackCache: directPlaybackProxy.cache,
+  hlsPlaybackCache: hlsPlaybackProxy.cache
 });
 
 const MIME_TYPES = {
@@ -496,3 +503,28 @@ function listen(port, attemptsLeft = MAX_PORT_ATTEMPTS) {
 }
 
 listen(PORT);
+
+function startWebDav() {
+  if (process.env.WEBDAV_ENABLED !== "1") return;
+
+  const host = process.env.WEBDAV_HOST || "127.0.0.1";
+  const username = String(process.env.WEBDAV_USERNAME || "");
+  const password = String(process.env.WEBDAV_PASSWORD || "");
+  const isLoopback = host === "127.0.0.1" || host === "::1" || host === "localhost";
+  if (!isLoopback && (!username || !password)) {
+    console.error("WebDAV bound to the network requires WEBDAV_USERNAME and WEBDAV_PASSWORD.");
+    return;
+  }
+
+  const port = Number(process.env.WEBDAV_PORT || 5178);
+  const server = createWebDavServer({
+    fileSystem: favoriteFileSystem,
+    auth: username && password ? { username, password } : null
+  });
+  server.once("error", (error) => console.error(`WebDAV server error: ${error.message}`));
+  server.listen(port, host, () => {
+    console.log(`MyTV read-only WebDAV library running at http://${host}:${port}/`);
+  });
+}
+
+startWebDav();
