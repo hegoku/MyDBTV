@@ -6,8 +6,7 @@ param(
   [Parameter(Mandatory = $true)]
   [string]$ShareName,
 
-  [Parameter(Mandatory = $true)]
-  [string[]]$ReadAccess
+  [string[]]$ReadAccess = @("$env:COMPUTERNAME\$env:USERNAME")
 )
 
 $ErrorActionPreference = "Stop"
@@ -21,5 +20,15 @@ if (Get-SmbShare -Name $ShareName -ErrorAction SilentlyContinue) {
   throw "An SMB share already exists with this name: $ShareName"
 }
 
-New-SmbShare -Name $ShareName -Path $MountPath -ReadAccess $ReadAccess -Description "MyTV read-only favorites" | Out-Null
-Write-Host "Created \\$env:COMPUTERNAME\$ShareName for: $($ReadAccess -join ', ')"
+$ResolvedReadAccess = $ReadAccess | ForEach-Object {
+  $account = ($_ -replace "\\+", "\").Trim()
+  if ($account -ieq "COMPUTER\user" -or $account -ieq "MY-PC\mytvreader") {
+    $fallback = "$env:COMPUTERNAME\$env:USERNAME"
+    Write-Warning "Replacing placeholder account '$account' with current user '$fallback'."
+    return $fallback
+  }
+  return $account
+}
+
+New-SmbShare -Name $ShareName -Path $MountPath -ReadAccess $ResolvedReadAccess -Description "MyTV read-only favorites" | Out-Null
+Write-Host "Created \\$env:COMPUTERNAME\$ShareName for: $($ResolvedReadAccess -join ', ')"

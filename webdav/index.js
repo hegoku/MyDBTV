@@ -73,7 +73,7 @@ function createWebDavServer({ fileSystem, auth }) {
           const children = await fileSystem.readdir(virtualPath);
           for (const child of children) {
             const childPath = `/${child.name}`;
-            const childStat = await fileSystem.stat(childPath);
+            const childStat = Number.isSafeInteger(child.size) ? child : await fileSystem.stat(childPath);
             if (childStat) responses.push(propResponse(encodeURI(childPath), childStat));
           }
         }

@@ -146,32 +146,86 @@ class DirectPlaybackCache {
     return `${this.chunkPath(sessionId, chunkIndex)}.part`;
   }
 
-  async getSession(url) {
-    if (!/^https?:\/\//i.test(String(url || ""))) {
-      throw new Error("A playable HTTP media URL is required.");
-    }
+  metaPath(sessionId) {
+    return path.join(this.sessionDir(sessionId), "meta.json");
+  }
 
+  tryLoadPersistedSessionSync(url) {
+    if (!/^https?:\/\//i.test(String(url || ""))) return null;
     const id = this.sessionIdFor(url);
     const existing = this.sessions.get(id);
     if (existing && !existing.closed) {
       existing.updatedAt = Date.now();
       return existing;
     }
+    const metaFile = this.metaPath(id);
+    if (!fs.existsSync(metaFile)) return null;
+    try {
+      const data = JSON.parse(fs.readFileSync(metaFile, "utf8"));
+      if (!data || !Number.isSafeInteger(data.total) || data.total <= 0) return null;
+      const session = new DirectPlaybackSession({
+        id,
+        url,
+        total: data.total,
+        contentType: contentTypeFor(url, data.contentType)
+      });
+      this.sessions.set(id, session);
+      return session;
+    } catch {
+      return null;
+    }
+  }
 
-    const probe = await this.probe(url);
-    if (!probe.total || !probe.supportsRange) {
-      throw new Error("This media server does not support byte-range playback.");
+  peekStat(url) {
+    const session = this.tryLoadPersistedSessionSync(url);
+    if (!session) return null;
+    return {
+      size: session.total,
+      contentType: session.contentType
+    };
+  }
+
+  async getSession(url) {
+    if (!/^https?:\/\//i.test(String(url || ""))) {
+      throw new Error("A playable HTTP media URL is required.");
     }
 
-    const session = new DirectPlaybackSession({
-      id,
-      url,
-      total: probe.total,
-      contentType: contentTypeFor(url, probe.contentType)
+    const persisted = this.tryLoadPersistedSessionSync(url);
+    if (persisted) return persisted;
+
+    const id = this.sessionIdFor(url);
+    if (this.sessionInflight.has(id)) {
+      return this.sessionInflight.get(id);
+    }
+
+    const promise = (async () => {
+      const probe = await this.probe(url);
+      if (!probe.total || !probe.supportsRange) {
+        throw new Error("This media server does not support byte-range playback.");
+      }
+
+      const contentType = contentTypeFor(url, probe.contentType);
+      const session = new DirectPlaybackSession({
+        id,
+        url,
+        total: probe.total,
+        contentType
+      });
+      this.sessions.set(id, session);
+      const dir = this.sessionDir(id);
+      fs.mkdirSync(dir, { recursive: true });
+      try {
+        fs.writeFileSync(this.metaPath(id), JSON.stringify({ url, total: probe.total, contentType }), "utf8");
+      } catch {
+        // Non-fatal if metadata persistence fails.
+      }
+      return session;
+    })().finally(() => {
+      this.sessionInflight.delete(id);
     });
-    this.sessions.set(id, session);
-    fs.mkdirSync(this.sessionDir(id), { recursive: true });
-    return session;
+
+    this.sessionInflight.set(id, promise);
+    return promise;
   }
 
   async probe(url) {

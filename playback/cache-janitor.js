@@ -37,6 +37,7 @@ async function collectFiles(cacheDir, currentDir = cacheDir, files = []) {
       continue;
     }
     if (!entry.isFile()) continue;
+    if (entry.name === "virtual-file.json" || entry.name === "meta.json") continue;
 
     try {
       const stats = await fs.promises.stat(entryPath);

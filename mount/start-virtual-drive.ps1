@@ -48,9 +48,12 @@ $arguments = @(
   "--webdav-url", $WebDavUrl,
   "--webdav-vendor", "other",
   "--read-only",
-  "--vfs-cache-mode", "off",
-  "--dir-cache-time", "15s",
-  "--attr-timeout", "10s",
+  "--vfs-cache-mode", "minimal",
+  "--vfs-read-chunk-size", "4M",
+  "--vfs-read-chunk-size-limit", "32M",
+  "--buffer-size", "16M",
+  "--dir-cache-time", "30s",
+  "--attr-timeout", "30s",
   "--volname", "MyTV Favorites"
 )
 
@@ -86,4 +89,4 @@ if ($process.HasExited) {
 } | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding utf8
 
 Write-Host "Mounted MyTV Favorites at $MountPath"
-Write-Host "Run .\mount\publish-smb-share.ps1 -MountPath '$MountPath' -ShareName MyTV -ReadAccess 'COMPUTER\\user' from an elevated PowerShell to publish it over SMB."
+Write-Host "Run .\mount\publish-smb-share.ps1 -MountPath '$MountPath' -ShareName MyTV -ReadAccess '$env:COMPUTERNAME\$env:USERNAME' from an elevated PowerShell to publish it over SMB."

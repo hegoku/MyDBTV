@@ -6,6 +6,7 @@ const { HlsPlaylistLoader, sequenceIv } = require("./hls-playlist");
 
 const DEFAULT_PREFETCH_AHEAD = 4;
 const DEFAULT_CONCURRENCY = 4;
+const DEFAULT_INDEX_CONCURRENCY = 16;
 
 function sha1(text) {
   return crypto.createHash("sha1").update(String(text)).digest("hex");
@@ -20,6 +21,23 @@ function normalizePositiveInt(value, fallback, max) {
 function decryptAes128(buffer, key, iv) {
   const decipher = crypto.createDecipheriv("aes-128-cbc", key, iv);
   return Buffer.concat([decipher.update(buffer), decipher.final()]);
+}
+
+function findFirstSegmentIndex(segments, offset) {
+  let low = 0;
+  let high = segments.length - 1;
+  let result = segments.length;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    const entry = segments[mid];
+    if (entry.start + entry.length > offset) {
+      result = mid;
+      high = mid - 1;
+    } else {
+      low = mid + 1;
+    }
+  }
+  return result;
 }
 
 class HlsPlaybackSession {
@@ -43,6 +61,7 @@ class HlsPlaybackCache {
     cacheDir,
     loader = new HlsPlaylistLoader(),
     concurrency = DEFAULT_CONCURRENCY,
+    indexConcurrency = DEFAULT_INDEX_CONCURRENCY,
     prefetchAhead = DEFAULT_PREFETCH_AHEAD,
     maxCacheBytes,
     maxCacheAgeMs,
@@ -51,17 +70,21 @@ class HlsPlaybackCache {
     this.cacheDir = cacheDir;
     this.loader = loader;
     this.concurrency = normalizePositiveInt(concurrency, DEFAULT_CONCURRENCY, 12);
+    this.indexConcurrency = normalizePositiveInt(indexConcurrency, DEFAULT_INDEX_CONCURRENCY, 64);
     this.prefetchAhead = normalizePositiveInt(prefetchAhead, DEFAULT_PREFETCH_AHEAD, 12);
     this.sessions = new Map();
     this.inflight = new Map();
     this.keyCache = new Map();
+    this.keyInflight = new Map();
     this.virtualFiles = new Map();
+    this.virtualFilesByUrl = new Map();
+    this.virtualFileInflight = new Map();
     this.janitor = new CacheJanitor({
       cacheDir,
       maxBytes: maxCacheBytes,
       maxAgeMs: maxCacheAgeMs,
       cleanupIntervalMs,
-      getActiveSessionIds: () => new Set(this.sessions.keys())
+      getActiveSessionIds: () => new Set([...this.sessions.keys(), ...this.virtualFiles.keys()])
     });
     fs.mkdirSync(this.cacheDir, { recursive: true });
     this.janitor.cleanupNow().catch(() => {});
@@ -81,6 +104,173 @@ class HlsPlaybackCache {
 
   tempSegmentPath(sessionId, index) {
     return `${this.segmentPath(sessionId, index)}.part`;
+  }
+
+  virtualFileIndexPath(sessionId) {
+    return path.join(this.sessionDir(sessionId), "virtual-file.json");
+  }
+
+  registerVirtualFile(file, sourceUrl) {
+    this.virtualFiles.set(file.sessionId, file);
+    if (file.playlistUrl) {
+      this.virtualFilesByUrl.set(file.playlistUrl, file);
+    }
+    if (sourceUrl) {
+      this.virtualFilesByUrl.set(sourceUrl, file);
+    }
+    if (!this.sessions.has(file.sessionId)) {
+      const playlist = {
+        url: file.playlistUrl || sourceUrl || "",
+        type: "media",
+        segments: file.segments.map((entry) => entry.segment),
+        hasEndList: true,
+        hasDiscontinuity: false
+      };
+      this.sessions.set(file.sessionId, new HlsPlaybackSession({ id: file.sessionId, playlist }));
+    }
+    fs.mkdirSync(this.sessionDir(file.sessionId), { recursive: true });
+    return file;
+  }
+
+  tryLoadPersistedVirtualFileSync(url) {
+    if (!url) return null;
+    const mem = this.virtualFilesByUrl.get(url);
+    if (mem) return mem;
+
+    const initialSessionId = this.sessionIdFor(url);
+    const initialPath = this.virtualFileIndexPath(initialSessionId);
+    if (!fs.existsSync(initialPath)) return null;
+
+    try {
+      let data = JSON.parse(fs.readFileSync(initialPath, "utf8"));
+      if (data && data.redirectSessionId) {
+        const targetPath = this.virtualFileIndexPath(data.redirectSessionId);
+        if (!fs.existsSync(targetPath)) return null;
+        data = JSON.parse(fs.readFileSync(targetPath, "utf8"));
+      }
+      if (
+        !data ||
+        data.version !== 1 ||
+        !data.sessionId ||
+        !Number.isSafeInteger(data.size) ||
+        !Array.isArray(data.segments) ||
+        !data.segments.length
+      ) {
+        return null;
+      }
+
+      const segments = data.segments.map((entry, idx) => {
+        const rawSeg = entry.segment || {};
+        const key = rawSeg.key
+          ? {
+              method: rawSeg.key.method,
+              url: rawSeg.key.url,
+              iv: rawSeg.key.ivHex ? Buffer.from(rawSeg.key.ivHex, "hex") : null
+            }
+          : null;
+        const segment = {
+          index: Number.isSafeInteger(rawSeg.index) ? rawSeg.index : idx,
+          playbackId: rawSeg.playbackId,
+          kind: rawSeg.kind || "media",
+          url: rawSeg.url,
+          name: rawSeg.name || "",
+          byteRange: rawSeg.byteRange || null,
+          key,
+          sequenceNumber: rawSeg.sequenceNumber || 0,
+          contentType: rawSeg.contentType || data.contentType
+        };
+        if (!segment.playbackId) {
+          segment.playbackId = this.segmentIdFor(segment);
+        }
+        return {
+          segment,
+          start: entry.start,
+          length: entry.length
+        };
+      });
+
+      const file = {
+        sessionId: data.sessionId,
+        playlistUrl: data.playlistUrl || url,
+        size: data.size,
+        contentType: data.contentType,
+        extension: data.extension,
+        segments
+      };
+      return this.registerVirtualFile(file, url);
+    } catch {
+      return null;
+    }
+  }
+
+  async persistVirtualFile(file, sourceUrl) {
+    try {
+      const payload = {
+        version: 1,
+        sessionId: file.sessionId,
+        playlistUrl: file.playlistUrl,
+        size: file.size,
+        contentType: file.contentType,
+        extension: file.extension,
+        updatedAt: new Date().toISOString(),
+        segments: file.segments.map(({ start, length, segment }) => ({
+          start,
+          length,
+          segment: {
+            index: segment.index,
+            playbackId: segment.playbackId,
+            kind: segment.kind,
+            url: segment.url,
+            name: segment.name,
+            byteRange: segment.byteRange || null,
+            sequenceNumber: segment.sequenceNumber,
+            contentType: segment.contentType,
+            key: segment.key
+              ? {
+                  method: segment.key.method,
+                  url: segment.key.url,
+                  ivHex: segment.key.iv ? Buffer.from(segment.key.iv).toString("hex") : null
+                }
+              : null
+          }
+        }))
+      };
+
+      const targetDir = this.sessionDir(file.sessionId);
+      await fs.promises.mkdir(targetDir, { recursive: true });
+      const targetPath = this.virtualFileIndexPath(file.sessionId);
+      const tempPath = `${targetPath}.part`;
+      await fs.promises.writeFile(tempPath, JSON.stringify(payload), "utf8");
+      await fs.promises.rename(tempPath, targetPath);
+
+      const sourceSessionId = sourceUrl ? this.sessionIdFor(sourceUrl) : file.sessionId;
+      if (sourceSessionId !== file.sessionId) {
+        const aliasDir = this.sessionDir(sourceSessionId);
+        await fs.promises.mkdir(aliasDir, { recursive: true });
+        const aliasPath = this.virtualFileIndexPath(sourceSessionId);
+        const aliasTempPath = `${aliasPath}.part`;
+        const aliasPayload = {
+          version: 1,
+          redirectSessionId: file.sessionId,
+          playlistUrl: file.playlistUrl,
+          updatedAt: payload.updatedAt
+        };
+        await fs.promises.writeFile(aliasTempPath, JSON.stringify(aliasPayload), "utf8");
+        await fs.promises.rename(aliasTempPath, aliasPath);
+      }
+    } catch {
+      // Non-fatal if disk persistence fails.
+    }
+  }
+
+  peekVirtualFileStat(url) {
+    const file = this.tryLoadPersistedVirtualFileSync(url);
+    if (!file) return null;
+    return {
+      size: file.size,
+      contentType: file.contentType,
+      extension: file.extension
+    };
   }
 
   async loadPlaylist(url) {
@@ -109,23 +299,43 @@ class HlsPlaybackCache {
   }
 
   async loadVirtualFile(url) {
+    const cached = this.tryLoadPersistedVirtualFileSync(url);
+    if (cached) return cached;
+
+    if (this.virtualFileInflight.has(url)) {
+      return this.virtualFileInflight.get(url);
+    }
+
+    const promise = this.buildVirtualFile(url).finally(() => {
+      this.virtualFileInflight.delete(url);
+    });
+    this.virtualFileInflight.set(url, promise);
+    return promise;
+  }
+
+  async buildVirtualFile(url) {
     let playlist = await this.loadPlaylist(url);
     if (playlist.type === "master") {
       const variant = [...playlist.variants].sort((a, b) => b.bandwidth - a.bandwidth)[0];
       if (!variant) throw new Error("The HLS master playlist has no playable variant.");
+      const cachedVariant = this.tryLoadPersistedVirtualFileSync(variant.url);
+      if (cachedVariant) {
+        this.registerVirtualFile(cachedVariant, url);
+        await this.persistVirtualFile(cachedVariant, url);
+        return cachedVariant;
+      }
       playlist = await this.loadPlaylist(variant.url);
     }
     if (!playlist.hasEndList) throw new Error("Live HLS playlists cannot be exposed as a stable virtual file.");
     if (playlist.hasDiscontinuity) throw new Error("HLS playlists with discontinuities cannot be exported as one virtual file.");
-    // if (playlist.segments.some((segment) => segment.key?.method === "AES-128")) {
-    //   throw new Error("AES-128 HLS cannot be exposed as a virtual file until its decrypted size is indexed.");
-    // }
 
     const sessionId = this.sessionIdFor(playlist.url);
-    const existing = this.virtualFiles.get(sessionId);
-    if (existing) return existing;
-
-    const session = this.getSession(sessionId);
+    const existing = this.virtualFiles.get(sessionId) || this.tryLoadPersistedVirtualFileSync(playlist.url);
+    if (existing) {
+      this.registerVirtualFile(existing, url);
+      await this.persistVirtualFile(existing, url);
+      return existing;
+    }
 
     const isTransportStream = playlist.segments.every((segment) => segment.kind === "media" && segment.contentType === "video/mp2t");
     const isFragmentedMp4 = playlist.segments.every((segment) => segment.contentType === "video/mp4");
@@ -133,18 +343,39 @@ class HlsPlaybackCache {
       throw new Error("This HLS segment layout cannot be represented as one media file.");
     }
 
-    // const lengths = await this.mapWithConcurrency(playlist.segments, (segment) => this.segmentLength(segment));
-    // AES-128 分片必须以解密后的实际长度作为索引
+    // Pre-fetch unique AES-128 keys once before probing segments in parallel.
+    const keyUrls = new Set();
+    for (const segment of playlist.segments) {
+      if (segment.key?.method === "AES-128" && segment.key.url) {
+        keyUrls.add(segment.key.url);
+      }
+    }
+    if (keyUrls.size > 0) {
+      await Promise.all([...keyUrls].map((keyUrl) => this.loadKey(keyUrl)));
+    }
+
     const lengths = await this.mapWithConcurrency(
       playlist.segments,
       (segment) => {
+        const cachedFile = this.segmentPath(sessionId, segment.playbackId);
+        try {
+          const stats = fs.statSync(cachedFile);
+          if (stats.isFile() && stats.size > 0) {
+            return stats.size;
+          }
+        } catch {
+          // Segment is not cached locally yet.
+        }
+
         if (segment.key?.method === "AES-128") {
           return this.decryptedSegmentLength(segment);
         }
 
         return this.segmentLength(segment);
-      }
+      },
+      this.indexConcurrency
     );
+
     let offset = 0;
     const segments = playlist.segments.map((segment, index) => {
       const entry = { segment, start: offset, length: lengths[index] };
@@ -153,16 +384,20 @@ class HlsPlaybackCache {
     });
     const file = {
       sessionId,
+      playlistUrl: playlist.url,
       size: offset,
       contentType: isTransportStream ? "video/mp2t" : "video/mp4",
       extension: isTransportStream ? ".ts" : ".mp4",
       segments
     };
-    this.virtualFiles.set(sessionId, file);
+    this.registerVirtualFile(file, url);
+    await this.persistVirtualFile(file, url);
     return file;
   }
 
   async statVirtualFile(url) {
+    const fast = this.peekVirtualFileStat(url);
+    if (fast) return fast;
     const file = await this.loadVirtualFile(url);
     return { size: file.size, contentType: file.contentType, extension: file.extension };
   }
@@ -175,11 +410,25 @@ class HlsPlaybackCache {
     if (start >= file.size || length === 0) return Buffer.alloc(0);
     const end = Math.min(start + length, file.size);
     const session = this.getSession(file.sessionId);
+
+    const firstIdx = findFirstSegmentIndex(file.segments, start);
+    const overlapping = [];
+    for (let i = firstIdx; i < file.segments.length; i += 1) {
+      const entry = file.segments[i];
+      if (entry.start >= end) break;
+      overlapping.push(entry);
+    }
+    if (!overlapping.length) return Buffer.alloc(0);
+
+    await Promise.all(overlapping.map((entry) => this.ensureSegment(session, entry.segment)));
+    const lastEntry = overlapping[overlapping.length - 1];
+    if (lastEntry && Number.isSafeInteger(lastEntry.segment.index)) {
+      this.prefetchAfter(session, lastEntry.segment.index);
+    }
+
     const buffers = [];
-    for (const entry of file.segments) {
+    for (const entry of overlapping) {
       const segmentEnd = entry.start + entry.length;
-      if (segmentEnd <= start || entry.start >= end) continue;
-      await this.ensureSegment(session, entry.segment);
       const buffer = await this.readCachedSegment(session, entry.segment);
       const from = Math.max(start, entry.start) - entry.start;
       const to = Math.min(end, segmentEnd) - entry.start;
@@ -204,18 +453,20 @@ class HlsPlaybackCache {
       headers: { range: "bytes=0-0", "user-agent": "mytv-legal-media-tool/1.0" }
     });
     const match = String(response.headers.get("content-range") || "").match(/bytes\s+\d+-\d+\/(\d+)/i);
+    await response.arrayBuffer().catch(() => {});
     if (response.status !== 206 || !match) throw new Error("Unable to determine an HLS segment length.");
     return Number(match[1]);
   }
 
-  async mapWithConcurrency(values, task) {
+  async mapWithConcurrency(values, task, concurrency = this.concurrency) {
     const results = new Array(values.length);
     let next = 0;
-    const workers = Array.from({ length: Math.min(this.concurrency, values.length) }, async () => {
+    const workerCount = Math.min(normalizePositiveInt(concurrency, this.concurrency, 64), values.length);
+    const workers = Array.from({ length: workerCount }, async () => {
       while (next < values.length) {
         const index = next;
         next += 1;
-        results[index] = await task(values[index]);
+        results[index] = await task(values[index], index);
       }
     });
     await Promise.all(workers);
@@ -315,12 +566,21 @@ class HlsPlaybackCache {
 
   async loadKey(url) {
     if (this.keyCache.has(url)) return this.keyCache.get(url);
-    const buffer = await this.loadBytes(url);
-    if (buffer.length !== 16) {
-      throw new Error("HLS AES-128 keys must be 16 bytes.");
-    }
-    this.keyCache.set(url, buffer);
-    return buffer;
+    if (this.keyInflight.has(url)) return this.keyInflight.get(url);
+
+    const promise = (async () => {
+      const buffer = await this.loadBytes(url);
+      if (buffer.length !== 16) {
+        throw new Error("HLS AES-128 keys must be 16 bytes.");
+      }
+      this.keyCache.set(url, buffer);
+      return buffer;
+    })().finally(() => {
+      this.keyInflight.delete(url);
+    });
+
+    this.keyInflight.set(url, promise);
+    return promise;
   }
 
   async loadBytes(url, byteRange) {
@@ -349,45 +609,78 @@ class HlsPlaybackCache {
     fs.promises.utimes(filePath, now, now).catch(() => {});
   }
 
-  async decryptedSegmentLength(segment) {
-    const encryptedLength = await this.segmentLength(segment);
-
-    if (encryptedLength <= 0 || encryptedLength % 16 !== 0) {
-      throw new Error("Invalid AES-128 encrypted segment length.");
+  async trySuffixRangeTail(url) {
+    try {
+      const response = await fetch(url, {
+        headers: {
+          range: "bytes=-32",
+          "user-agent": "mytv-legal-media-tool/1.0"
+        }
+      });
+      if (response.status !== 206) {
+        await response.arrayBuffer().catch(() => {});
+        return null;
+      }
+      const match = String(response.headers.get("content-range") || "").match(/bytes\s+(\d+)-(\d+)\/(\d+)/i);
+      const tail = Buffer.from(await response.arrayBuffer());
+      if (!match) return null;
+      const start = Number(match[1]);
+      const end = Number(match[2]);
+      const total = Number(match[3]);
+      const expectedLength = Math.min(32, total);
+      if (
+        !Number.isSafeInteger(total) ||
+        total <= 0 ||
+        total % 16 !== 0 ||
+        end !== total - 1 ||
+        end - start + 1 !== expectedLength ||
+        tail.length !== expectedLength
+      ) {
+        return null;
+      }
+      return { encryptedLength: total, tail };
+    } catch {
+      return null;
     }
+  }
 
+  async decryptedSegmentLength(segment) {
     const key = await this.loadKey(segment.key.url);
     const iv = segment.key.iv || sequenceIv(segment.sequenceNumber);
 
-    // 只需要最後 1～2 個 AES Block
-    const tailLength = Math.min(32, encryptedLength);
+    let encryptedLength = 0;
+    let tail = null;
 
-    const baseOffset = segment.byteRange
-      ? segment.byteRange.offset
-      : 0;
-
-    const tail = await this.loadBytes(segment.url, {
-      offset: baseOffset + encryptedLength - tailLength,
-      end: baseOffset + encryptedLength - 1
-    });
-
-    if (tail.length !== tailLength) {
-      throw new Error("Unable to read AES-128 segment tail.");
+    if (!segment.byteRange) {
+      const suffixProbe = await this.trySuffixRangeTail(segment.url);
+      if (suffixProbe) {
+        encryptedLength = suffixProbe.encryptedLength;
+        tail = suffixProbe.tail;
+      }
     }
 
-    const previousBlock = tailLength === 16
-      ? iv
-      : tail.subarray(0, 16);
+    if (!tail) {
+      encryptedLength = await this.segmentLength(segment);
+      if (encryptedLength <= 0 || encryptedLength % 16 !== 0) {
+        throw new Error("Invalid AES-128 encrypted segment length.");
+      }
 
+      const tailLength = Math.min(32, encryptedLength);
+      const baseOffset = segment.byteRange ? segment.byteRange.offset : 0;
+      tail = await this.loadBytes(segment.url, {
+        offset: baseOffset + encryptedLength - tailLength,
+        end: baseOffset + encryptedLength - 1
+      });
+      if (tail.length !== tailLength) {
+        throw new Error("Unable to read AES-128 segment tail.");
+      }
+    }
+
+    const tailLength = tail.length;
+    const previousBlock = tailLength === 16 ? iv : tail.subarray(0, 16);
     const lastBlock = tail.subarray(tailLength - 16);
 
-    // 只解密最後一個 Block，不處理整個視頻分片
-    const decipher = crypto.createDecipheriv(
-      "aes-128-cbc",
-      key,
-      previousBlock
-    );
-
+    const decipher = crypto.createDecipheriv("aes-128-cbc", key, previousBlock);
     decipher.setAutoPadding(false);
 
     const finalBlock = Buffer.concat([
@@ -396,11 +689,10 @@ class HlsPlaybackCache {
     ]);
 
     const padding = finalBlock[15];
-
     if (
       padding < 1 ||
       padding > 16 ||
-      !finalBlock.subarray(16 - padding).every(byte => byte === padding)
+      !finalBlock.subarray(16 - padding).every((byte) => byte === padding)
     ) {
       throw new Error("Invalid AES-128 PKCS#7 padding.");
     }

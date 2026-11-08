@@ -30,6 +30,7 @@ const hlsPlaybackProxy = new HlsPlaybackProxy({
   cache: new HlsPlaybackCache({
     cacheDir: path.join(PLAYBACK_CACHE_DIR, "hls"),
     concurrency: Number(process.env.HLS_PLAYBACK_CONCURRENCY || 4),
+    indexConcurrency: Number(process.env.HLS_INDEX_CONCURRENCY || 16),
     prefetchAhead: Number(process.env.HLS_PLAYBACK_PREFETCH_AHEAD || 4),
     maxCacheBytes: Number(process.env.HLS_PLAYBACK_CACHE_MAX_BYTES || PLAYBACK_CACHE_BUCKET_BYTES),
     maxCacheAgeMs: PLAYBACK_CACHE_MAX_AGE_MS,
@@ -304,13 +305,15 @@ async function startDownload(body) {
 }
 
 function saveFavorite(body) {
-  return favoriteStore.save({
+  const favorite = favoriteStore.save({
     originalPageUrl: body.originalPageUrl || body.sourceUrl || body.original_page_url,
     source: body.source,
     title: body.title,
     videoUrl: body.videoUrl || body.video_url,
     coverUrl: body.coverUrl || body.poster || body.cover_url
   });
+  favoriteFileSystem.warmFavorite(favorite);
+  return favorite;
 }
 
 function serveStatic(req, res, pathname) {
