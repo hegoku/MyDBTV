@@ -46,6 +46,24 @@ Downloads and favorites use Node's built-in SQLite support, so Node.js 24 or new
 - Cache playback data under `downloads/playback-cache/` with automatic size and age cleanup
 - Optionally expose compatible favorite videos through a read-only WebDAV library
 
+## Read-only FTP Favorites
+
+MyTV can expose favorites directly over FTP for media players (such as Kodi, Infuse, VLC, PotPlayer, nPlayer) that support FTP streaming.
+
+To enable FTP, set `FTP_ENABLED=1`:
+
+```powershell
+$env:FTP_ENABLED="1"
+$env:FTP_PORT="2121"
+npm start
+```
+
+- Default control port: `2121`
+- Default host: `0.0.0.0` (accessible from LAN devices)
+- Supports anonymous login (or optional `FTP_USERNAME` and `FTP_PASSWORD`)
+- Supports `PASV`, `EPSV`, `SIZE`, and `REST` for instant seeking and timeline navigation
+- Connect via `ftp://<your-pc-ip>:2121/` in external media players
+
 ## Read-only WebDAV Favorites
 
 Set `WEBDAV_ENABLED=1` before starting MyTV to expose eligible favorites as a virtual, read-only media folder.  The server reads HTTP byte ranges through the same direct playback cache used by the browser, so seeking and copying reuse cached chunks rather than downloading the whole file first.

@@ -11,6 +11,7 @@ const { HlsPlaybackCache } = require("./playback/hls-playback-cache");
 const { HlsPlaybackProxy } = require("./playback/hls-playback-proxy");
 const { FavoriteFileSystem } = require("./virtual-system");
 const { createWebDavServer } = require("./webdav");
+const { createFtpServer } = require("./ftp");
 
 const PORT = Number(process.env.PORT || 5177);
 const MAX_PORT_ATTEMPTS = 20;
@@ -29,9 +30,9 @@ const PLAYBACK_CACHE_CLEANUP_INTERVAL_MS = Number(process.env.PLAYBACK_CACHE_CLE
 const hlsPlaybackProxy = new HlsPlaybackProxy({
   cache: new HlsPlaybackCache({
     cacheDir: path.join(PLAYBACK_CACHE_DIR, "hls"),
-    concurrency: Number(process.env.HLS_PLAYBACK_CONCURRENCY || 6),
+    concurrency: Number(process.env.HLS_PLAYBACK_CONCURRENCY || 8),
     indexConcurrency: Number(process.env.HLS_INDEX_CONCURRENCY || 16),
-    prefetchAhead: Number(process.env.HLS_PLAYBACK_PREFETCH_AHEAD || 16),
+    prefetchAhead: Number(process.env.HLS_PLAYBACK_PREFETCH_AHEAD || 24),
     maxCacheBytes: Number(process.env.HLS_PLAYBACK_CACHE_MAX_BYTES || PLAYBACK_CACHE_BUCKET_BYTES),
     maxCacheAgeMs: PLAYBACK_CACHE_MAX_AGE_MS,
     cleanupIntervalMs: PLAYBACK_CACHE_CLEANUP_INTERVAL_MS
@@ -535,3 +536,25 @@ function startWebDav() {
 }
 
 startWebDav();
+
+function startFtp() {
+  if (process.env.FTP_ENABLED !== "1") return;
+
+  const host = process.env.FTP_HOST || "0.0.0.0";
+  const port = Number(process.env.FTP_PORT || 2121);
+  const username = String(process.env.FTP_USERNAME || "");
+  const password = String(process.env.FTP_PASSWORD || "");
+  const pasvHost = process.env.FTP_PASV_HOST || null;
+
+  const server = createFtpServer({
+    fileSystem: favoriteFileSystem,
+    auth: username && password ? { username, password } : null,
+    pasvHost
+  });
+  server.once("error", (error) => console.error(`FTP server error: ${error.message}`));
+  server.listen(port, host, () => {
+    console.log(`MyTV read-only FTP library running at ftp://${host}:${port}/`);
+  });
+}
+
+startFtp();

@@ -4,8 +4,8 @@ const path = require("path");
 const { CacheJanitor } = require("./cache-janitor");
 const { HlsPlaylistLoader, sequenceIv } = require("./hls-playlist");
 
-const DEFAULT_PREFETCH_AHEAD = 16;
-const DEFAULT_CONCURRENCY = 6;
+const DEFAULT_PREFETCH_AHEAD = 24;
+const DEFAULT_CONCURRENCY = 8;
 const DEFAULT_INDEX_CONCURRENCY = 16;
 
 function sha1(text) {
@@ -598,7 +598,7 @@ class HlsPlaybackCache {
       try {
         const response = await fetch(url, {
           headers,
-          signal: AbortSignal.timeout(8000)
+          signal: AbortSignal.timeout(20000)
         });
         if (!response.ok) {
           throw new Error(`HLS media request failed with ${response.status}.`);

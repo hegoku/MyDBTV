@@ -12,6 +12,7 @@ $statePath = Join-Path $stateDir "server-pid.json"
 
 function Run-MyTv-Server {
     $env:WEBDAV_ENABLED=1
+    $env:FTP_ENABLED=1
 
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
         Write-Error "Cannot find node in the system PATH"
