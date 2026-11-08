@@ -22,16 +22,16 @@ const { providers, providerRegistry } = require("./providers");
 const downloadManager = new DownloadManager({ downloadDir: DOWNLOAD_DIR });
 const favoriteStore = new FavoriteStore({ filePath: path.join(DOWNLOAD_DIR, "favorites.sqlite") });
 const localMediaTokens = new Map();
-const PLAYBACK_CACHE_MAX_BYTES = Number(process.env.PLAYBACK_CACHE_MAX_BYTES || 2 * 1024 * 1024 * 1024);
+const PLAYBACK_CACHE_MAX_BYTES = Number(process.env.PLAYBACK_CACHE_MAX_BYTES || 4 * 1024 * 1024 * 1024);
 const PLAYBACK_CACHE_BUCKET_BYTES = Math.max(1, Math.floor(PLAYBACK_CACHE_MAX_BYTES / 2));
 const PLAYBACK_CACHE_MAX_AGE_MS = Number(process.env.PLAYBACK_CACHE_MAX_AGE_MS || 3 * 24 * 60 * 60 * 1000);
 const PLAYBACK_CACHE_CLEANUP_INTERVAL_MS = Number(process.env.PLAYBACK_CACHE_CLEANUP_INTERVAL_MS || 60 * 1000);
 const hlsPlaybackProxy = new HlsPlaybackProxy({
   cache: new HlsPlaybackCache({
     cacheDir: path.join(PLAYBACK_CACHE_DIR, "hls"),
-    concurrency: Number(process.env.HLS_PLAYBACK_CONCURRENCY || 4),
+    concurrency: Number(process.env.HLS_PLAYBACK_CONCURRENCY || 6),
     indexConcurrency: Number(process.env.HLS_INDEX_CONCURRENCY || 16),
-    prefetchAhead: Number(process.env.HLS_PLAYBACK_PREFETCH_AHEAD || 4),
+    prefetchAhead: Number(process.env.HLS_PLAYBACK_PREFETCH_AHEAD || 16),
     maxCacheBytes: Number(process.env.HLS_PLAYBACK_CACHE_MAX_BYTES || PLAYBACK_CACHE_BUCKET_BYTES),
     maxCacheAgeMs: PLAYBACK_CACHE_MAX_AGE_MS,
     cleanupIntervalMs: PLAYBACK_CACHE_CLEANUP_INTERVAL_MS

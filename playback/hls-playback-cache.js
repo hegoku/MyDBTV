@@ -4,8 +4,8 @@ const path = require("path");
 const { CacheJanitor } = require("./cache-janitor");
 const { HlsPlaylistLoader, sequenceIv } = require("./hls-playlist");
 
-const DEFAULT_PREFETCH_AHEAD = 4;
-const DEFAULT_CONCURRENCY = 4;
+const DEFAULT_PREFETCH_AHEAD = 16;
+const DEFAULT_CONCURRENCY = 6;
 const DEFAULT_INDEX_CONCURRENCY = 16;
 
 function sha1(text) {
@@ -69,9 +69,9 @@ class HlsPlaybackCache {
   }) {
     this.cacheDir = cacheDir;
     this.loader = loader;
-    this.concurrency = normalizePositiveInt(concurrency, DEFAULT_CONCURRENCY, 12);
+    this.concurrency = normalizePositiveInt(concurrency, DEFAULT_CONCURRENCY, 24);
     this.indexConcurrency = normalizePositiveInt(indexConcurrency, DEFAULT_INDEX_CONCURRENCY, 64);
-    this.prefetchAhead = normalizePositiveInt(prefetchAhead, DEFAULT_PREFETCH_AHEAD, 12);
+    this.prefetchAhead = normalizePositiveInt(prefetchAhead, DEFAULT_PREFETCH_AHEAD, 64);
     this.sessions = new Map();
     this.inflight = new Map();
     this.keyCache = new Map();
@@ -518,6 +518,7 @@ class HlsPlaybackCache {
       const task = this.downloadSegment(session, segment)
         .finally(() => {
           this.inflight.delete(key);
+          this.fillPrefetchQueue(session);
         });
       this.inflight.set(key, task);
     }
@@ -525,22 +526,27 @@ class HlsPlaybackCache {
   }
 
   prefetchAfter(session, index) {
-    const end = Math.min(session.playlist.segments.length, index + 1 + this.prefetchAhead);
-    const candidates = [];
-    for (let next = index + 1; next < end; next += 1) {
+    session.targetPrefetchIndex = Math.max(
+      session.targetPrefetchIndex || 0,
+      Math.min(session.playlist.segments.length, index + 1 + this.prefetchAhead)
+    );
+    this.fillPrefetchQueue(session);
+  }
+
+  fillPrefetchQueue(session) {
+    if (!session || !session.targetPrefetchIndex) return;
+    const end = session.targetPrefetchIndex;
+    const start = Math.max(0, end - this.prefetchAhead - 2);
+
+    for (let next = start; next < end; next += 1) {
+      if (this.inflight.size >= this.concurrency) break;
       const segment = session.playlist.segments[next];
+      if (!segment) continue;
       const finalPath = this.segmentPath(session.id, segment.playbackId);
       const key = `${session.id}:${segment.playbackId}`;
       if (!fs.existsSync(finalPath) && !this.inflight.has(key)) {
-        candidates.push(segment);
+        this.ensureSegment(session, segment).catch(() => {});
       }
-    }
-
-    const openSlots = Math.max(0, this.concurrency - this.inflight.size);
-    for (const segment of candidates.slice(0, openSlots)) {
-      this.ensureSegment(session, segment).catch(() => {
-        // Foreground playback requests surface the real error when the segment is needed.
-      });
     }
   }
 
@@ -583,18 +589,32 @@ class HlsPlaybackCache {
     return promise;
   }
 
-  async loadBytes(url, byteRange) {
+  async loadBytes(url, byteRange, retries = 2) {
     const headers = { "user-agent": "mytv-legal-media-tool/1.0" };
     if (byteRange) headers.range = `bytes=${byteRange.offset}-${byteRange.end}`;
 
-    const response = await fetch(url, { headers });
-    if (!response.ok) {
-      throw new Error(`HLS media request failed with ${response.status}.`);
+    let lastError = null;
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+      try {
+        const response = await fetch(url, {
+          headers,
+          signal: AbortSignal.timeout(8000)
+        });
+        if (!response.ok) {
+          throw new Error(`HLS media request failed with ${response.status}.`);
+        }
+        if (byteRange && response.status !== 206) {
+          throw new Error("The HLS server did not honor the byte-range request.");
+        }
+        return Buffer.from(await response.arrayBuffer());
+      } catch (err) {
+        lastError = err;
+        if (attempt < retries) {
+          await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
+        }
+      }
     }
-    if (byteRange && response.status !== 206) {
-      throw new Error("The HLS server did not honor the byte-range request.");
-    }
-    return Buffer.from(await response.arrayBuffer());
+    throw lastError;
   }
 
   async readCachedSegment(session, segment) {
