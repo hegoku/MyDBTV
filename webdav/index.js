@@ -1,8 +1,10 @@
 const http = require("http");
 
+const SERVE_WINDOW_SIZE = 8 * 1024 * 1024;
+
 function escapeXml(value) {
   return String(value || "").replace(/[<>&"']/g, (character) => ({
-    "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&apos;"
+    "<": "&lt;", ">": "&gt;", "&": "&amp;", "\"": "&quot;", "'": "&apos;"
   })[character]);
 }
 
@@ -18,13 +20,45 @@ function normalizePath(value) {
 }
 
 function parseRange(value, total) {
-  if (!value) return { start: 0, end: total - 1, partial: false };
+  if (!value) {
+    const end = Math.min(SERVE_WINDOW_SIZE - 1, total - 1);
+    return { start: 0, end, partial: end < total - 1 };
+  }
+
   const match = String(value).match(/^bytes=(\d*)-(\d*)$/i);
   if (!match) return null;
-  const start = match[1] === "" ? Math.max(0, total - Number(match[2])) : Number(match[1]);
-  const end = match[1] === "" || match[2] === "" ? total - 1 : Number(match[2]);
-  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || start >= total || end < start) return null;
-  return { start, end: Math.min(end, total - 1), partial: true };
+
+  let start;
+  let end;
+  if (match[1] === "") {
+    const suffixLength = Number(match[2]);
+    if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) return null;
+    start = Math.max(0, total - suffixLength);
+    end = total - 1;
+  } else {
+    start = Number(match[1]);
+    if (match[2] === "") {
+      end = Math.min(start + SERVE_WINDOW_SIZE - 1, total - 1);
+    } else {
+      end = Number(match[2]);
+    }
+  }
+
+  if (
+    !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(end) ||
+    start < 0 ||
+    start >= total ||
+    end < start
+  ) {
+    return null;
+  }
+
+  return {
+    start,
+    end: Math.min(end, total - 1),
+    partial: true
+  };
 }
 
 function hasValidBasicAuth(req, auth) {
@@ -35,6 +69,12 @@ function hasValidBasicAuth(req, auth) {
 }
 
 function sendDavError(res, status, message) {
+  if (res.headersSent) {
+    if (!res.writableEnded) {
+      try { res.destroy(); } catch {}
+    }
+    return;
+  }
   res.writeHead(status, { "content-type": "text/plain; charset=utf-8" });
   res.end(message);
 }
@@ -86,17 +126,32 @@ function createWebDavServer({ fileSystem, auth }) {
         const entry = await fileSystem.stat(virtualPath);
         if (!entry) return sendDavError(res, 404, "Not found.");
         if (entry.type !== "file") return sendDavError(res, 405, "Directories cannot be downloaded.");
+
         const range = parseRange(req.headers.range, entry.size);
         if (!range) {
           res.writeHead(416, { "content-range": `bytes */${entry.size}`, "accept-ranges": "bytes" });
           return res.end();
         }
+
         const length = range.end - range.start + 1;
-        const headers = { "content-type": entry.contentType || "application/octet-stream", "content-length": length, "accept-ranges": "bytes", "cache-control": "no-store" };
+        const headers = {
+          "content-type": entry.contentType || "application/octet-stream",
+          "content-length": length,
+          "accept-ranges": "bytes",
+          "cache-control": "no-store"
+        };
         if (range.partial) headers["content-range"] = `bytes ${range.start}-${range.end}/${entry.size}`;
-        res.writeHead(range.partial ? 206 : 200, headers);
-        if (req.method === "HEAD") return res.end();
+
+        if (req.method === "HEAD") {
+          res.writeHead(range.partial ? 206 : 200, headers);
+          return res.end();
+        }
+
+        // Fetch the buffer before sending headers to avoid ERR_HTTP_HEADERS_SENT if read throws
         const buffer = await fileSystem.read(virtualPath, range.start, length);
+        if (res.destroyed || req.destroyed) return;
+
+        res.writeHead(range.partial ? 206 : 200, headers);
         return res.end(buffer);
       }
 

@@ -54,7 +54,10 @@ $arguments = @(
   "--buffer-size", "16M",
   "--dir-cache-time", "30s",
   "--attr-timeout", "30s",
-  "--volname", "MyTV Favorites"
+  "--volname", "MyTV Favorites",
+  "--file-perms", "0777",
+  "--dir-perms", "0777",
+  "-o", "FileSecurity=D:P(A;;FA;;;WD)"
 )
 
 if ($WebDavUsername) {
