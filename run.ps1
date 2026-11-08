@@ -34,7 +34,7 @@ function Run-MyTv-Server {
         startedAt = (Get-Date).ToString("o")
     } | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding utf8
 
-    .\mount\start-virtual-drive.ps1 -MountPath "C:\MyTV-Favorites"
+    .\mount\start-virtual-drive.ps1 -MountPath "C:\MyTV-Favorites" -WebDavUsername $env:WEBDAV_USERNAME -WebDavPassword $env:WEBDAV_PASSWORD
 }
 
 function Stop-MyTv-Server {
